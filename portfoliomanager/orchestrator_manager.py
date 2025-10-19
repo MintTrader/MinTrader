@@ -453,6 +453,53 @@ class OrchestratorPortfolioManager:
         # Build context for LLM
         context_parts = []
         
+        # ========== CRITICAL: Show exclusion list FIRST ==========
+        # Build exclusion list BEFORE showing anything else
+        recently_analyzed_tickers = set()
+        stocks_to_exclude = set()
+        stocks_recently_analyzed_warning = []
+        stocks_ok_to_reanalyze = []
+        
+        if recent_analysis.get('recently_analyzed'):
+            for ra in recent_analysis['recently_analyzed']:
+                ticker = ra['ticker']
+                days_ago = ra['days_ago']
+                date = ra['date']
+                
+                # Track all recently analyzed (for position marking)
+                if days_ago < 14:
+                    recently_analyzed_tickers.add(ticker)
+                
+                # Categorize by recency
+                if days_ago < 3:
+                    # Exclude stocks analyzed in past 3 days
+                    stocks_to_exclude.add(ticker)
+                    stocks_recently_analyzed_warning.append(f"{ticker} (analyzed {days_ago} days ago on {date})")
+                elif days_ago < 7:
+                    # Show warning but allow if major news
+                    stocks_recently_analyzed_warning.append(f"{ticker} (analyzed {days_ago} days ago on {date} - only if major news)")
+                else:
+                    # Older analyses, can re-analyze
+                    stocks_ok_to_reanalyze.append(f"{ticker} (last analyzed {days_ago} days ago)")
+        
+        # ========== START PROMPT: EXCLUSION LIST FIRST ==========
+        context_parts.append("=" * 80)
+        context_parts.append("🚫 DO NOT SELECT THESE STOCKS - RECENTLY ANALYZED:")
+        context_parts.append("=" * 80)
+        
+        if stocks_to_exclude:
+            context_parts.append(f"❌ HARD EXCLUDE ({len(stocks_to_exclude)} stocks) - DO NOT select under any circumstances:")
+            for item in sorted(stocks_recently_analyzed_warning):
+                if any(ticker in item for ticker in stocks_to_exclude):
+                    context_parts.append(f"   • {item}")
+            context_parts.append("")
+            context_parts.append(f"💡 You can still make trades on these stocks using their historical reports!")
+            context_parts.append(f"   Use: read_historical_report(ticker, 'final_trade_decision')")
+        else:
+            context_parts.append("✅ No recently analyzed stocks to exclude (all stocks available)")
+        
+        context_parts.append("")
+        
         # Previous iteration context
         if last_summary and "No previous iteration" not in last_summary:
             context_parts.append("=== PREVIOUS ITERATION SUMMARY ===")
@@ -470,12 +517,6 @@ class OrchestratorPortfolioManager:
         context_parts.append(f"Portfolio Value: ${account.get('portfolio_value', 0):,.2f}")
         
         # Positions - mark which ones need analysis
-        recently_analyzed_tickers = set()
-        if recent_analysis.get('recently_analyzed'):
-            for ra in recent_analysis['recently_analyzed']:
-                if ra['days_ago'] < 14:  # Within threshold
-                    recently_analyzed_tickers.add(ra['ticker'])
-        
         if positions:
             context_parts.append(f"\nCurrent Positions ({len(positions)}):")
             positions_needing_analysis = []
@@ -484,10 +525,12 @@ class OrchestratorPortfolioManager:
                 pnl_pct = (p.get('unrealized_plpc', 0) * 100)
                 
                 # Check if this position was recently analyzed
-                if ticker in recently_analyzed_tickers:
-                    status = "✅ Recently analyzed"
+                if ticker in stocks_to_exclude:
+                    status = "🚫 Recently analyzed - DO NOT SELECT (use historical report)"
+                elif ticker in recently_analyzed_tickers:
+                    status = "✅ Analyzed recently"
                 else:
-                    status = "⚠️  NEEDS ANALYSIS"
+                    status = "⚠️  NEEDS ANALYSIS - GOOD CANDIDATE"
                     positions_needing_analysis.append(ticker)
                 
                 context_parts.append(
@@ -496,7 +539,7 @@ class OrchestratorPortfolioManager:
                 )
             
             if positions_needing_analysis:
-                context_parts.append(f"\n⚠️  {len(positions_needing_analysis)} position(s) need analysis: {', '.join(positions_needing_analysis)}")
+                context_parts.append(f"\n✅ {len(positions_needing_analysis)} position(s) AVAILABLE for analysis: {', '.join(positions_needing_analysis)}")
         else:
             context_parts.append("\nNo current positions")
         
@@ -512,24 +555,6 @@ class OrchestratorPortfolioManager:
         else:
             context_parts.append("\nNo pending orders")
         
-        # Recent analysis - create exclusion list for stocks analyzed today or very recently
-        stocks_to_exclude = set()
-        if recent_analysis.get('recently_analyzed'):
-            context_parts.append(f"\n⚠️  RECENTLY ANALYZED STOCKS (DO NOT RE-ANALYZE):")
-            context_parts.append(f"   💡 Use read_historical_report(ticker, 'final_trade_decision') to see past analysis")
-            for ra in recent_analysis['recently_analyzed']:
-                days_ago = ra['days_ago']
-                # Exclude stocks analyzed in past 3 days (0, 1, 2 days ago)
-                if days_ago < 3:
-                    stocks_to_exclude.add(ra['ticker'])
-                    context_parts.append(f"  - {ra['ticker']}: {ra['date']} ({days_ago} days ago) ❌ EXCLUDE")
-                elif days_ago < 7:
-                    # Show but allow if there's major news
-                    context_parts.append(f"  - {ra['ticker']}: {ra['date']} ({days_ago} days ago) ⚠️  Only if major news")
-                else:
-                    # Older analyses, can re-analyze
-                    context_parts.append(f"  - {ra['ticker']}: {ra['date']} ({days_ago} days ago) ✅ Can re-analyze")
-        
         # Market context
         context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:1000]}")  # Limit size
         
@@ -537,42 +562,48 @@ class OrchestratorPortfolioManager:
 
 {chr(10).join(context_parts)}
 
+================================================================================
+YOUR TASK: SELECT 0-3 STOCKS FOR ANALYSIS
+================================================================================
+
+CRITICAL RULES (READ FIRST):
+1. 🚫 NEVER select stocks listed in "HARD EXCLUDE" above
+2. ✅ Maximum 3 stocks total
+3. 💡 You can trade excluded stocks using read_historical_report - no need to re-analyze them
+
 SELECTION STRATEGY - Balance these objectives:
-1. 📊 EXISTING POSITIONS: Re-analyze holdings marked "⚠️ NEEDS ANALYSIS" above
-   - These positions haven't been analyzed in past 14 days
-   - Possible actions after analysis:
-     * 📈 BUY MORE: Add to winning positions or average down on quality stocks
-     * 🤝 HOLD: Maintain current position size
-     * 📉 SELL: Exit losing positions or take profits
-   - Prioritize positions showing significant changes (large gains/losses)
-   
-2. 🆕 NEW OPPORTUNITIES: Discover new stocks to potentially buy
-   - Use market context to identify trending/undervalued stocks
-   - Consider diversification (avoid over-concentration in one sector)
-   - Look for stocks with positive momentum and strong fundamentals
 
-SUGGESTED BALANCE (use counts shown above):
-- 3+ positions need analysis → Analyze 2-3 existing positions (portfolio health first)
-- 1-2 positions need analysis → Mix: 1-2 existing + 1 new opportunity (balanced)
-- All positions recently analyzed → Analyze 2-3 new opportunities (growth focus)
-- Portfolio well-positioned → Select 0 stocks (patience is OK)
+1️⃣ EXISTING POSITIONS marked "⚠️ NEEDS ANALYSIS - GOOD CANDIDATE":
+   - These haven't been analyzed recently and need fresh analysis
+   - After analysis you can:
+     * 📈 BUY MORE: Add to winning positions or average down
+     * 🤝 HOLD: Maintain current position
+     * 📉 SELL: Exit or take profits
+   - Prioritize positions with large gains/losses
 
-💡 TIP: Re-analyzing existing positions can lead to BUY decisions to increase position size!
+2️⃣ NEW INVESTMENT OPPORTUNITIES:
+   - Use market context to find trending/undervalued stocks
+   - Consider diversification (avoid sector over-concentration)
+   - Look for positive momentum + strong fundamentals
+   - Check market context for hot sectors or stocks
 
-RULES:
-- Maximum 3 stocks to analyze
-- ❌ NEVER re-analyze stocks from past 3 days (shown with ❌ EXCLUDE above)
-- ⚠️  Avoid stocks analyzed in past 7 days unless there's major breaking news
-- Consider: pending orders may fill later - don't duplicate orders for same stock
+SUGGESTED APPROACH:
+• If 3+ positions NEED ANALYSIS → Select 2-3 of them (portfolio health first)
+• If 1-2 positions NEED ANALYSIS → Mix: 1-2 existing + 1 new opportunity
+• If all positions recently analyzed → Focus on 2-3 NEW opportunities
+• If portfolio well-positioned → Select 0 stocks (patience is a strategy)
 
-IMPORTANT: Pending orders may not be filled immediately. They could fill:
-- Later today (if market is open)
-- Tomorrow (if market is closed)
-- Never (if price doesn't reach limit)
+💡 REMEMBER:
+- Positions marked with 🚫 can still be traded using historical reports
+- Don't re-analyze what's already been analyzed
+- Consider pending orders (may fill later)
+- New opportunities come from market context research
 
-Consider this when making new decisions.
-
-Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] for no stocks.
+Respond with ONLY a JSON list of ticker symbols.
+Examples:
+- ["NVDA", "MSFT"]: Two new stocks to analyze
+- ["AAPL"]: One existing position needing analysis  
+- []: No stocks (if nothing compelling)
 """
         
         try:
@@ -596,17 +627,33 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
                 original_selection = selected_stocks.copy()
                 selected_stocks = [s for s in selected_stocks if s not in stocks_to_exclude]
                 
+                # Log what happened
                 if len(original_selection) > len(selected_stocks):
                     excluded = [s for s in original_selection if s in stocks_to_exclude]
                     self.logger.log_system(
-                        f"⚠️  LLM tried to select recently analyzed stocks: {excluded}. "
-                        "Filtered them out to avoid redundant analysis."
+                        f"⚠️  LLM ignored exclusion list and selected: {excluded}. "
+                        f"Filtered them out (had {len(stocks_to_exclude)} stocks in exclusion list). "
+                        "This should not happen - the prompt needs improvement."
+                    )
+                elif stocks_to_exclude:
+                    self.logger.log_system(
+                        f"✅ LLM successfully avoided {len(stocks_to_exclude)} recently analyzed stocks: "
+                        f"{sorted(list(stocks_to_exclude))}"
                     )
                 
                 # Limit to max analyses
                 selected_stocks = selected_stocks[:self.max_analyses]
                 
-                self.logger.log_system(f"LLM selected {len(selected_stocks)} stocks: {selected_stocks}")
+                if selected_stocks:
+                    self.logger.log_system(f"LLM selected {len(selected_stocks)} stocks: {selected_stocks}")
+                else:
+                    self.logger.log_system(
+                        f"LLM selected 0 stocks. This could mean:\n"
+                        f"  • Portfolio is well-positioned (all positions recently analyzed)\n"
+                        f"  • No compelling opportunities in market context\n"
+                        f"  • LLM being cautious - which is OK!"
+                    )
+                
                 return selected_stocks
             else:
                 self.logger.log_system("⚠️  Failed to parse LLM response, analyzing no stocks")
@@ -656,10 +703,17 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
             prompt_parts.append("\nNo new stocks analyzed this iteration.")
         
         # Portfolio state
+        cash = float(account.get('cash', 0))
+        buying_power = float(account.get('buying_power', 0))
+        portfolio_value = float(account.get('portfolio_value', 0))
+        
         prompt_parts.append(f"\n💰 ACCOUNT STATE:")
-        prompt_parts.append(f"  - Cash: ${account.get('cash', 0):,.2f}")
-        prompt_parts.append(f"  - Buying Power: ${account.get('buying_power', 0):,.2f}")
-        prompt_parts.append(f"  - Portfolio Value: ${account.get('portfolio_value', 0):,.2f}")
+        prompt_parts.append(f"  - Available Cash: ${cash:,.2f} ✅ USE THIS FOR BUYING")
+        prompt_parts.append(f"  - Buying Power: ${buying_power:,.2f} 🚫 DO NOT USE (margin risk)")
+        prompt_parts.append(f"  - Portfolio Value: ${portfolio_value:,.2f}")
+        prompt_parts.append(f"\n⚠️  CRITICAL CONSTRAINT: Only use CASH, never buying power!")
+        prompt_parts.append(f"   • Available for new positions: ${cash:,.2f}")
+        prompt_parts.append(f"   • This prevents margin trading and negative balances")
         
         if positions:
             prompt_parts.append(f"\n📈 CURRENT POSITIONS ({len(positions)}):")
@@ -700,6 +754,15 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
         prompt_parts.append("4. When done, call review_and_decide() to complete")
         
         prompt_parts.append("\nIMPORTANT RULES:")
+        prompt_parts.append("=" * 60)
+        prompt_parts.append("🚫 CRITICAL: CASH-ONLY POLICY 🚫")
+        prompt_parts.append("=" * 60)
+        prompt_parts.append(f"- ONLY use available CASH (${cash:,.2f}) for buying")
+        prompt_parts.append("- NEVER use buying power (creates margin debt)")
+        prompt_parts.append("- NEVER go negative or into margin")
+        prompt_parts.append("- If insufficient cash, you MUST sell positions first to raise cash")
+        prompt_parts.append("")
+        prompt_parts.append("TRADING GUIDELINES:")
         prompt_parts.append("- You can trade based on analysis AND/OR portfolio state")
         prompt_parts.append("- 📈 ADDING TO POSITIONS: You CAN buy more of stocks you already own!")
         prompt_parts.append("  * If analysis is bullish and position is small → Consider increasing position size")
@@ -793,15 +856,27 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
         
         # Handle trading execution tools
         elif tool_name == 'place_buy_order':
-            ticker = tool_args.get('ticker')
-            order_value = tool_args.get('order_value')
-            reasoning = tool_args.get('reasoning')
+            ticker = str(tool_args.get('ticker', ''))
+            order_value_raw = tool_args.get('order_value', 0)
+            reasoning = str(tool_args.get('reasoning', ''))
             
-            # Validation
-            available_cash = float(account.get('buying_power', 0))
-            order_value = float(order_value)
+            # CRITICAL: Use CASH only, never buying power (to avoid margin/negative balance)
+            available_cash = float(account.get('cash', 0))
+            buying_power = float(account.get('buying_power', 0))
+            
+            try:
+                order_value = float(order_value_raw)
+            except (ValueError, TypeError):
+                return f"❌ Invalid order_value: {order_value_raw}"
+            
+            # STRICT VALIDATION: Only use available cash, never go into margin
             if order_value > available_cash:
-                return f"❌ Insufficient funds. Have ${available_cash:,.2f}, trying to invest ${order_value:,.2f}"
+                return (
+                    f"❌ Insufficient CASH. Available cash: ${available_cash:,.2f}, "
+                    f"trying to invest: ${order_value:,.2f}\n"
+                    f"   ⚠️  POLICY: We only use CASH, not buying power (${buying_power:,.2f}), "
+                    f"to avoid margin and negative balances."
+                )
             
             if order_value < 1000:
                 return f"❌ Order value too small. Minimum $1,000, got ${order_value:,.2f}"
@@ -819,33 +894,63 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
             if has_pending:
                 return f"⚠️  Already have pending order for {ticker}. Avoid duplicate orders!"
             
-            # Execute trade (or log for now)
+            # Log the trade
             self.logger.log_system(f"💵 BUY: {ticker} for ~${order_value:,.2f}")
             self.logger.log_system(f"   Reasoning: {reasoning}")
             self.logger.log_system(f"   Market: {'OPEN' if market_open else 'CLOSED - will queue'}")
             
-            # Track trade
-            self.trades_executed.append({
-                'action': 'BUY',
-                'ticker': ticker,
-                'value': order_value,
-                'reasoning': reasoning
-            })
-            
-            # Uncomment for actual execution:
-            # try:
-            #     # Calculate shares based on current price
-            #     qty = calculate_qty_from_value(ticker, order_value)
-            #     place_market_order(ticker, qty=qty, side='buy')
-            # except Exception as e:
-            #     return f"❌ Error executing BUY: {e}"
-            
-            return f"✅ BUY order placed for {ticker} (~${order_value:,.2f}). {'Will execute when market opens.' if not market_open else 'Executing now.'}"
+            # Execute actual trade
+            try:
+                # Get current price and calculate quantity
+                from alpaca.data.requests import StockLatestTradeRequest
+                from tradingagents.dataflows.alpaca_common import get_data_client
+                
+                data_client = get_data_client()
+                request = StockLatestTradeRequest(symbol_or_symbols=ticker)
+                latest_trade = data_client.get_stock_latest_trade(request)
+                current_price = float(latest_trade[ticker].price)
+                
+                # Calculate quantity (round down to avoid over-spending)
+                qty = int(order_value / current_price)
+                
+                if qty < 1:
+                    return f"❌ Order value too small. ${order_value:,.2f} only buys {qty} shares at ${current_price:.2f}/share. Need at least 1 share."
+                
+                actual_cost = qty * current_price
+                
+                # Place the market order
+                order_result = place_market_order(ticker, qty=qty, side='buy')
+                
+                # Track trade
+                self.trades_executed.append({
+                    'action': 'BUY',
+                    'ticker': ticker,
+                    'value': actual_cost,
+                    'quantity': qty,
+                    'price': current_price,
+                    'reasoning': reasoning,
+                    'order_id': order_result.get('id')
+                })
+                
+                self.logger.log_system(f"   ✅ Order placed: {qty} shares @ ${current_price:.2f} = ${actual_cost:,.2f}")
+                
+                return (
+                    f"✅ BUY order placed for {ticker}!\n"
+                    f"   • Quantity: {qty} shares\n"
+                    f"   • Price: ~${current_price:.2f}/share\n"
+                    f"   • Total: ~${actual_cost:,.2f}\n"
+                    f"   • Order ID: {order_result.get('id')}\n"
+                    f"   {'• Will execute when market opens' if not market_open else '• Executing now'}"
+                )
+                
+            except Exception as e:
+                self.logger.log_system(f"   ❌ Error executing BUY: {e}")
+                return f"❌ Error executing BUY order for {ticker}: {str(e)}"
         
         elif tool_name == 'place_sell_order':
-            ticker = tool_args.get('ticker')
-            quantity = tool_args.get('quantity')
-            reasoning = tool_args.get('reasoning')
+            ticker = str(tool_args.get('ticker', ''))
+            quantity = tool_args.get('quantity', 0)
+            reasoning = str(tool_args.get('reasoning', ''))
             
             # Find position
             position = next((p for p in positions if p.get('symbol') == ticker), None)
@@ -853,36 +958,67 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
                 return f"❌ No position found for {ticker}. Cannot sell."
             
             # Check quantity
-            available_qty = position.get('qty', 0)
+            available_qty = float(position.get('qty', 0))
             if quantity == "all":
                 quantity = available_qty
-            elif quantity > available_qty:
+            else:
+                quantity = float(quantity)
+            
+            if quantity > available_qty:
                 return f"❌ Trying to sell {quantity} shares but only have {available_qty}"
             
-            # Execute trade (or log for now)
+            if quantity <= 0:
+                return f"❌ Invalid quantity: {quantity}. Must be positive."
+            
+            # Log the trade
             self.logger.log_system(f"💸 SELL: {ticker} ({quantity} shares)")
             self.logger.log_system(f"   Reasoning: {reasoning}")
             self.logger.log_system(f"   Market: {'OPEN' if market_open else 'CLOSED - will queue'}")
             
-            # Track trade
-            self.trades_executed.append({
-                'action': 'SELL',
-                'ticker': ticker,
-                'quantity': quantity,
-                'reasoning': reasoning
-            })
-            
-            # Uncomment for actual execution:
-            # try:
-            #     place_market_order(ticker, qty=quantity, side='sell')
-            # except Exception as e:
-            #     return f"❌ Error executing SELL: {e}"
-            
-            return f"✅ SELL order placed for {ticker} ({quantity} shares). {'Will execute when market opens.' if not market_open else 'Executing now.'}"
+            # Execute actual trade
+            try:
+                # Get current price for logging
+                from alpaca.data.requests import StockLatestTradeRequest
+                from tradingagents.dataflows.alpaca_common import get_data_client
+                
+                data_client = get_data_client()
+                request = StockLatestTradeRequest(symbol_or_symbols=ticker)
+                latest_trade = data_client.get_stock_latest_trade(request)
+                current_price = float(latest_trade[ticker].price)
+                estimated_value = quantity * current_price
+                
+                # Place the market order
+                order_result = place_market_order(ticker, qty=quantity, side='sell')
+                
+                # Track trade
+                self.trades_executed.append({
+                    'action': 'SELL',
+                    'ticker': ticker,
+                    'quantity': quantity,
+                    'price': current_price,
+                    'value': estimated_value,
+                    'reasoning': reasoning,
+                    'order_id': order_result.get('id')
+                })
+                
+                self.logger.log_system(f"   ✅ Order placed: {quantity} shares @ ~${current_price:.2f} = ~${estimated_value:,.2f}")
+                
+                return (
+                    f"✅ SELL order placed for {ticker}!\n"
+                    f"   • Quantity: {quantity} shares\n"
+                    f"   • Price: ~${current_price:.2f}/share\n"
+                    f"   • Total: ~${estimated_value:,.2f}\n"
+                    f"   • Order ID: {order_result.get('id')}\n"
+                    f"   {'• Will execute when market opens' if not market_open else '• Executing now'}"
+                )
+                
+            except Exception as e:
+                self.logger.log_system(f"   ❌ Error executing SELL: {e}")
+                return f"❌ Error executing SELL order for {ticker}: {str(e)}"
         
         elif tool_name == 'cancel_order':
-            ticker = tool_args.get('ticker')
-            reasoning = tool_args.get('reasoning')
+            ticker = str(tool_args.get('ticker', ''))
+            reasoning = str(tool_args.get('reasoning', ''))
             
             # Find pending order
             order = next((o for o in open_orders if o.get('symbol') == ticker), None)
@@ -890,18 +1026,30 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
                 return f"❌ No pending order found for {ticker}"
             
             order_id = order.get('id')
+            order_side = order.get('side')
+            order_qty = order.get('qty')
             
-            # Cancel order (or log for now)
+            # Log the cancellation
             self.logger.log_system(f"🚫 CANCEL: Order for {ticker}")
+            self.logger.log_system(f"   Order: {order_side} {order_qty} shares")
             self.logger.log_system(f"   Reasoning: {reasoning}")
             
-            # Uncomment for actual execution:
-            # try:
-            #     cancel_alpaca_order(order_id)
-            # except Exception as e:
-            #     return f"❌ Error cancelling order: {e}"
-            
-            return f"✅ Order for {ticker} cancelled."
+            # Execute actual cancellation
+            try:
+                cancel_alpaca_order(order_id)
+                
+                self.logger.log_system(f"   ✅ Order cancelled successfully")
+                
+                return (
+                    f"✅ Order for {ticker} cancelled!\n"
+                    f"   • Order ID: {order_id}\n"
+                    f"   • Type: {order_side} {order_qty} shares\n"
+                    f"   • Reason: {reasoning}"
+                )
+                
+            except Exception as e:
+                self.logger.log_system(f"   ❌ Error cancelling order: {e}")
+                return f"❌ Error cancelling order for {ticker}: {str(e)}"
         
         elif tool_name == 'review_and_decide':
             self.logger.log_system("✅ LLM signaled completion of trading decisions")
