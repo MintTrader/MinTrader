@@ -8,10 +8,10 @@ DEFAULT_CONFIG = {
         os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
         "dataflows/data_cache",
     ),
-    # LLM settings
+    # LLM settings (optimized for cost)
     "llm_provider": "openai",
-    "deep_think_llm": "o4-mini",
-    "quick_think_llm": "gpt-4o-mini",
+    "deep_think_llm": "gpt-4.1-nano",      # Use nano for maximum cost optimization
+    "quick_think_llm": "gpt-4.1-nano",     # Use nano for maximum cost optimization
     "backend_url": "https://api.openai.com/v1",
     # Debate and discussion settings
     "max_debate_rounds": 1,

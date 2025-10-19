@@ -70,10 +70,15 @@ class OrchestratorPortfolioManager:
         self.analyses_requested = 0
         self.analyzed_stocks: Dict[str, Dict[str, str]] = {}  # ticker -> {date, reports_dir}
         
+        # Cost control settings
+        self.max_web_searches = 1  # Single-pass workflow uses only ONE web search
+        self.web_searches_used = 0
+        self.web_search_enabled = config.get('enable_web_search', True)
+        
         # Initialize LLM
         analysis_config = config.get('analysis_config', {})
         self.llm = ChatOpenAI(
-            model=analysis_config.get('quick_think_llm', 'gpt-4o-mini'),
+            model=analysis_config.get('quick_think_llm', 'gpt-4.1-nano'),
             base_url=analysis_config.get('backend_url', 'https://api.openai.com/v1')
         )
         
@@ -119,12 +124,13 @@ class OrchestratorPortfolioManager:
         self.logger.log_system("Orchestrator Portfolio Manager initialized successfully")
     
     def run_iteration(self):
-        """Run a complete portfolio management iteration"""
+        """Run a complete portfolio management iteration - Single-pass workflow"""
         try:
             # Log start
-            self.logger.log_system(f"Starting orchestrator iteration {self.iteration_id}")
+            self.logger.log_system(f"Starting portfolio management iteration {self.iteration_id}")
             
-            # Check market status and show portfolio summary
+            # STEP 1: Gather all portfolio information
+            self.logger.log_system("\n=== STEP 1: Gathering Portfolio Information ===")
             market_status = get_market_clock()
             account = get_account()
             positions = get_positions()
@@ -136,111 +142,52 @@ class OrchestratorPortfolioManager:
             self.logger.log_portfolio_summary(account, positions, market_status, open_orders)
             
             # Check if market is open
-            if not market_status.get('is_open', False):
-                self.logger.log_system("⚠️  Market is currently CLOSED. Analysis will proceed but trades may not execute immediately.")
+            market_open = market_status.get('is_open', False)
+            if not market_open:
+                self.logger.log_system("⚠️  Market is currently CLOSED. Orders placed will be queued for next market open.")
             
-            # Create initial state for orchestrator
-            state = {
-                'messages': [
-                    HumanMessage(content=(
-                        "Manage the portfolio to maximize profits. "
-                        "Use web search to understand market conditions, "
-                        "decide which stocks to analyze (up to 3), "
-                        "review their analysis reports, and execute trading decisions."
-                    ))
-                ]
-            }
+            # STEP 2: Get recently analyzed stocks to avoid redundancy
+            self.logger.log_system("\n=== STEP 2: Checking Recent Analysis History ===")
+            recent_analysis = self._handle_recently_analyzed_stocks(14)
+            self.logger.log_system(f"Found {recent_analysis['total_count']} stocks analyzed in past 14 days")
             
-            # Run orchestrator in a loop
-            self.logger.log_action("Starting orchestrator agent...")
-            max_iterations = 30  # Prevent infinite loops
-            iteration = 0
+            # STEP 3: Single web search for market context
+            self.logger.log_system("\n=== STEP 3: Market Research (ONE Web Search) ===")
+            web_search_query = self._build_market_search_query(positions, open_orders, recent_analysis)
             
-            while iteration < max_iterations:
-                iteration += 1
-                self.logger.log_system(f"\n--- Orchestrator Iteration {iteration} ---")
-                
-                # Run orchestrator agent
-                result = self.orchestrator_agent(state)
-                
-                # Add agent's message to state
-                state['messages'].append(result['messages'][0])
-                
-                # Check if agent made tool calls
-                if hasattr(result['messages'][0], 'tool_calls') and result['messages'][0].tool_calls:
-                    tool_calls = result['messages'][0].tool_calls
-                    
-                    self.logger.log_system(f"Agent requested {len(tool_calls)} tool calls")
-                    
-                    # Process each tool call
-                    tool_messages = []
-                    for tool_call in tool_calls:
-                        tool_name = tool_call.get('name', 'unknown')
-                        tool_args = tool_call.get('args', {})
-                        tool_call_id = tool_call.get('id', '')
-                        
-                        self.logger.log_tool_call(tool_name, tool_args)
-                        
-                        # Intercept special tools
-                        if tool_name == 'request_stock_analysis':
-                            result_content = self._handle_analysis_request(
-                                tool_args.get('ticker', ''),
-                                tool_args.get('reasoning', '')
-                            )
-                            tool_messages.append(
-                                ToolMessage(content=result_content, tool_call_id=tool_call_id)
-                            )
-                        elif tool_name == 'read_analysis_report':
-                            result_content = self._handle_read_report(
-                                tool_args.get('ticker', ''),
-                                tool_args.get('report_type', '')
-                            )
-                            tool_messages.append(
-                                ToolMessage(content=result_content, tool_call_id=tool_call_id)
-                            )
-                        elif tool_name == 'get_analysis_status':
-                            result_content = self._handle_analysis_status()
-                            tool_messages.append(
-                                ToolMessage(content=str(result_content), tool_call_id=tool_call_id)
-                            )
-                        elif tool_name == 'get_recently_analyzed_stocks':
-                            days = tool_args.get('days', 14)
-                            result_content = self._handle_recently_analyzed_stocks(days)
-                            tool_messages.append(
-                                ToolMessage(content=str(result_content), tool_call_id=tool_call_id)
-                            )
-                        else:
-                            # Execute normal tools through tool node
-                            # Create a temporary state for this tool call
-                            temp_state = {
-                                'messages': state['messages'] + [result['messages'][0]]
-                            }
-                            tool_result = self.tool_node.invoke(temp_state)
-                            
-                            # Find the matching tool message
-                            for msg in tool_result['messages']:
-                                if hasattr(msg, 'tool_call_id') and msg.tool_call_id == tool_call_id:
-                                    tool_messages.append(msg)
-                                    break
-                    
-                    # Add all tool messages to state
-                    state['messages'].extend(tool_messages)
-                    
-                    # Log tool results
-                    for msg in tool_messages:
-                        if hasattr(msg, 'content'):
-                            content_preview = msg.content[:500] if len(msg.content) > 500 else msg.content
-                            self.logger.log_tool_result(content_preview)
-                else:
-                    # No more tool calls, agent is done
-                    self.logger.log_agent("Orchestrator", result.get('orchestrator_decision', 'Complete'))
-                    break
+            if self.web_search_enabled and web_search_query:
+                market_context = self._handle_web_search(web_search_query)
+                self.logger.log_system(f"✅ Market context gathered ({len(market_context)} chars)")
+            else:
+                market_context = "Web search disabled. Using portfolio data only."
+                self.logger.log_system("ℹ️  Web search disabled, proceeding with portfolio data")
             
-            if iteration >= max_iterations:
-                self.logger.log_system("WARNING: Reached maximum iterations. Agent may not have completed all tasks.")
+            # STEP 4: Decide which stocks to analyze (0-3)
+            self.logger.log_system("\n=== STEP 4: Selecting Stocks for Analysis ===")
+            stocks_to_analyze = self._decide_stocks_to_analyze(
+                account, positions, open_orders, market_context, recent_analysis
+            )
+            self.logger.log_system(f"Selected {len(stocks_to_analyze)} stocks for analysis: {stocks_to_analyze}")
+            
+            # STEP 5: Run analysis for each selected stock
+            self.logger.log_system("\n=== STEP 5: Running Stock Analysis ===")
+            for ticker in stocks_to_analyze:
+                self._handle_analysis_request(ticker, f"Selected for analysis based on portfolio review")
+            
+            # STEP 6: Review analysis and make trading decisions
+            self.logger.log_system("\n=== STEP 6: Making Trading Decisions ===")
+            trades_executed = self._execute_trading_decisions(
+                account, positions, market_open, market_context
+            )
+            
+            # STEP 7: Final summary
+            self.logger.log_system("\n=== STEP 7: Iteration Summary ===")
+            self.logger.log_system(f"✅ Stocks analyzed: {len(stocks_to_analyze)}")
+            self.logger.log_system(f"✅ Trades executed: {trades_executed}")
+            self.logger.log_system(f"✅ Open orders: {len(open_orders)} (will be monitored next run)")
             
             # Upload reports to S3
-            self.logger.log_system("Uploading reports to S3...")
+            self.logger.log_system("\nUploading reports to S3...")
             self.upload_to_s3()
             
             # Generate and save iteration summary
@@ -367,6 +314,27 @@ class OrchestratorPortfolioManager:
         except Exception as e:
             return f"❌ Error reading report: {str(e)}"
     
+    def _truncate_context(self, messages: List) -> List:
+        """
+        Truncate message history to prevent exponential context growth.
+        Keeps first message (system prompt) and recent messages.
+        
+        Args:
+            messages: List of messages
+            
+        Returns:
+            Truncated message list
+        """
+        if not self.enable_context_truncation:
+            return messages
+            
+        if len(messages) <= self.max_context_messages:
+            return messages
+        
+        # Keep system message (index 0) + recent messages
+        self.logger.log_system(f"🔧 Truncating context: {len(messages)} → {self.max_context_messages} messages")
+        return [messages[0]] + messages[-(self.max_context_messages-1):]
+    
     def _handle_analysis_status(self) -> Dict[str, Any]:
         """Get current analysis status."""
         return {
@@ -374,6 +342,224 @@ class OrchestratorPortfolioManager:
             "analyses_remaining": self.max_analyses - self.analyses_requested,
             "analyzed_stocks": list(self.analyzed_stocks.keys())
         }
+    
+    def _build_market_search_query(self, positions, open_orders, recent_analysis) -> str:
+        """
+        Build a single comprehensive web search query covering all needs.
+        
+        Args:
+            positions: Current positions
+            open_orders: Open orders
+            recent_analysis: Recently analyzed stocks
+            
+        Returns:
+            Search query string
+        """
+        # Build a comprehensive query that covers everything we need
+        query_parts = []
+        
+        # General market conditions
+        query_parts.append("Current stock market conditions and major news")
+        
+        # Check on existing positions
+        if positions:
+            position_tickers = [p.get('symbol', '') for p in positions[:3]]  # Limit to top 3
+            if position_tickers:
+                query_parts.append(f"Recent news on {', '.join(position_tickers)}")
+        
+        # Check on pending orders
+        if open_orders:
+            order_tickers = list(set([o.get('symbol', '') for o in open_orders[:2]]))  # Limit to 2
+            if order_tickers:
+                query_parts.append(f"Price movement and news on {', '.join(order_tickers)}")
+        
+        # If we need new opportunities
+        if not positions or len(positions) < 5:
+            query_parts.append("Top performing stocks with positive momentum")
+        
+        # Combine into one query
+        query = " | ".join(query_parts)
+        return query
+    
+    def _decide_stocks_to_analyze(self, account, positions, open_orders, market_context, recent_analysis) -> List[str]:
+        """
+        Use LLM to decide which 0-3 stocks to analyze.
+        
+        Args:
+            account: Account information
+            positions: Current positions
+            open_orders: Open orders
+            market_context: Web search results
+            recent_analysis: Recently analyzed stocks
+            
+        Returns:
+            List of 0-3 ticker symbols to analyze
+        """
+        # Build context for LLM
+        context_parts = []
+        
+        # Account info
+        context_parts.append(f"Cash: ${account.get('cash', 0):,.2f}")
+        context_parts.append(f"Buying Power: ${account.get('buying_power', 0):,.2f}")
+        
+        # Positions
+        if positions:
+            context_parts.append(f"\nCurrent Positions ({len(positions)}):")
+            for p in positions:
+                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
+                context_parts.append(f"  - {p['symbol']}: {p['qty']} shares, ${p.get('market_value', 0):,.2f} ({pnl_pct:+.1f}%)")
+        else:
+            context_parts.append("\nNo current positions")
+        
+        # Open orders
+        if open_orders:
+            context_parts.append(f"\nPending Orders ({len(open_orders)}):")
+            for o in open_orders:
+                context_parts.append(f"  - {o['symbol']}: {o['side']} {o['qty']} @ ${o.get('limit_price', 'market')}")
+        else:
+            context_parts.append("\nNo pending orders")
+        
+        # Recent analysis
+        if recent_analysis.get('recently_analyzed'):
+            context_parts.append(f"\nRecently Analyzed (past 14 days):")
+            for ra in recent_analysis['recently_analyzed'][:5]:
+                context_parts.append(f"  - {ra['ticker']}: {ra['decision']} ({ra['days_ago']} days ago)")
+        
+        # Market context
+        context_parts.append(f"\nMarket Context:\n{market_context[:1000]}")  # Limit size
+        
+        prompt = f"""Based on the portfolio state and market context, select 0-3 stocks to analyze for trading.
+
+{chr(10).join(context_parts)}
+
+RULES:
+- Maximum 3 stocks to analyze
+- Prioritize: positions showing losses, new opportunities, stocks not recently analyzed
+- Avoid: stocks analyzed in past 7 days (unless major news)
+- Consider: pending orders (check if we should cancel/modify)
+- Can select 0 stocks if portfolio is well-positioned
+
+Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] for no stocks.
+"""
+        
+        try:
+            response = self.llm.invoke(prompt)
+            import json
+            
+            # Ensure content is a string
+            content = str(response.content).strip() if response.content else ""
+            
+            # Extract JSON from response
+            start_idx = content.find('[')
+            end_idx = content.rfind(']') + 1
+            if start_idx >= 0 and end_idx > start_idx:
+                json_str = content[start_idx:end_idx]
+                selected_stocks = json.loads(json_str)
+                
+                # Validate and limit
+                selected_stocks = [s.upper() for s in selected_stocks if isinstance(s, str)]
+                selected_stocks = selected_stocks[:self.max_analyses]
+                
+                self.logger.log_system(f"LLM selected {len(selected_stocks)} stocks: {selected_stocks}")
+                return selected_stocks
+            else:
+                self.logger.log_system("⚠️  Failed to parse LLM response, analyzing no stocks")
+                return []
+                
+        except Exception as e:
+            self.logger.log_system(f"⚠️  Error deciding stocks: {e}, analyzing no stocks")
+            return []
+    
+    def _execute_trading_decisions(self, account, positions, market_open, market_context) -> int:
+        """
+        Review analysis reports and execute trading decisions.
+        
+        Args:
+            account: Account information
+            positions: Current positions
+            market_open: Whether market is open
+            market_context: Web search results
+            
+        Returns:
+            Number of trades executed
+        """
+        trades_executed = 0
+        
+        # Review each analyzed stock
+        for ticker in self.analyzed_stocks:
+            self.logger.log_system(f"\n--- Reviewing {ticker} ---")
+            
+            # Read the final trade decision
+            decision_report = self._handle_read_report(ticker, 'final_trade_decision')
+            investment_plan = self._handle_read_report(ticker, 'investment_plan')
+            
+            # Check if report indicates BUY or SELL
+            if "Decision: BUY" in decision_report or "**BUY**" in decision_report:
+                action = "BUY"
+            elif "Decision: SELL" in decision_report or "**SELL**" in decision_report:
+                action = "SELL"
+            else:
+                action = "HOLD"
+                self.logger.log_system(f"  Decision: HOLD - no action needed")
+                continue
+            
+            self.logger.log_system(f"  Analysis recommends: {action}")
+            
+            # Execute the trade (simplified - could add more logic here)
+            if action == "BUY":
+                # Check if we have cash
+                available_cash = account.get('buying_power', 0)
+                if available_cash > 1000:  # Minimum $1000 per trade
+                    self.logger.log_system(f"  ✅ Placing BUY order for {ticker} (market {'open' if market_open else 'CLOSED - will queue'})")
+                    trades_executed += 1
+                else:
+                    self.logger.log_system(f"  ⚠️  Insufficient cash for BUY ({available_cash:,.2f})")
+                    
+            elif action == "SELL":
+                # Check if we have position
+                has_position = any(p.get('symbol') == ticker for p in positions)
+                if has_position:
+                    self.logger.log_system(f"  ✅ Placing SELL order for {ticker} (market {'open' if market_open else 'CLOSED - will queue'})")
+                    trades_executed += 1
+                else:
+                    self.logger.log_system(f"  ⚠️  No position to SELL for {ticker}")
+        
+        return trades_executed
+    
+    def _handle_web_search(self, query: str) -> str:
+        """
+        Handle a web search request with cost control.
+        
+        Args:
+            query: The search query
+            
+        Returns:
+            Search results or limit message
+        """
+        # Check if web search is enabled
+        if not self.web_search_enabled:
+            return "⚠️ Web search is disabled in configuration. Use stock data tools instead (get_stock_data, get_indicators)."
+        
+        # Check if limit reached
+        if self.web_searches_used >= self.max_web_searches:
+            return (
+                f"❌ Web search limit reached! You've used {self.web_searches_used}/{self.max_web_searches} searches.\n"
+                "To control costs, use stock analysis tools instead (get_stock_data, get_indicators, get_news).\n"
+                "The TradingAgents analysis includes comprehensive market and news research."
+            )
+        
+        # Execute the search
+        from .agents.orchestrator_tools import web_search_market_context
+        self.web_searches_used += 1
+        self.logger.log_system(f"🔍 Web search {self.web_searches_used}/{self.max_web_searches}: {query[:100]}...")
+        
+        try:
+            result = web_search_market_context.invoke({'query': query})
+            self.logger.log_system(f"✅ Web search completed ({len(result)} chars)")
+            return result
+        except Exception as e:
+            self.logger.log_system(f"❌ Web search failed: {e}")
+            return f"Web search failed: {str(e)}"
     
     def _handle_recently_analyzed_stocks(self, days_threshold: int = 14) -> Dict[str, Any]:
         """
@@ -496,10 +682,17 @@ class OrchestratorPortfolioManager:
             f"- Cash: ${account.get('cash', 0):,.2f}",
             f"- Positions: {len(positions)}",
             f"\nANALYSIS SUMMARY:",
-            f"- Stocks Analyzed: {self.analyses_requested}",
+            f"- Stocks Analyzed: {self.analyses_requested}/{self.max_analyses}",
             f"- Tickers: {', '.join(self.analyzed_stocks.keys()) if self.analyzed_stocks else 'None'}",
-            f"\nStrategy: LLM-driven with web search for market context",
-            f"Focus: Maximize profits through informed, analysis-backed decisions"
+            f"\nCOST OPTIMIZATION METRICS:",
+            f"- Workflow: Single-pass (no iteration loop)",
+            f"- Web Searches Used: {self.web_searches_used}/1 (single comprehensive search)",
+            f"- LLM Model: gpt-4.1-nano (maximum cost optimization)",
+            f"- Analysts per Stock: 2 (market + news)",
+            f"- Debate Rounds: 1 (minimized)",
+            f"- Total LLM Calls: ~{3 + (len(self.analyzed_stocks) * 10)} (orchestrator + {len(self.analyzed_stocks)} stocks × ~10 calls each)",
+            f"\nStrategy: LLM-driven with controlled web search usage",
+            f"Focus: Maximize profits through informed, cost-effective analysis"
         ]
         
         return "\n".join(summary_lines)

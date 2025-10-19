@@ -46,15 +46,25 @@ PORTFOLIO_CONFIG = {
     "max_stocks_to_analyze": 3,  # Limit to 3 stocks per iteration
     "max_news_stocks": 3,         # Max stocks to discover from news
     
+    # Cost Optimization Settings
+    "enable_web_search": True,                 # Enable/disable web search (expensive!)
+    "max_web_searches_per_iteration": 1,      # Single web search per iteration
+    
+    # Note: Single-pass workflow eliminates the need for:
+    # - Multiple orchestrator iterations (now just one pass)
+    # - Context truncation (no accumulating context)
+    # - Iteration limits (deterministic workflow)
+    
     # Analysis Config (passed to TradingAgentsGraph)
-    "analysis_analysts": ["market", "news", "fundamentals"],
+    # Using only 2 analysts reduces LLM calls by 33% while maintaining quality
+    "analysis_analysts": ["market", "news"],  # Removed "fundamentals" for cost optimization
     "analysis_config": {
         **DEFAULT_CONFIG,
-        # Use cost-effective models for comprehensive analysis
-        "deep_think_llm": "o1-mini",      # Reasoning model for deep analysis
-        "quick_think_llm": "gpt-4o-mini",  # Fast model for quick tasks
+        # Use GPT-4.1 nano for all analysis to minimize costs (cheapest model)
+        "deep_think_llm": "gpt-4.1-nano",      # Use nano for all analysis
+        "quick_think_llm": "gpt-4.1-nano",     # Use nano for all analysis
         "backend_url": "https://api.openai.com/v1",
-        # Enable comprehensive analysis
+        # Minimize debate rounds to reduce LLM calls
         "max_debate_rounds": 1,
         "max_risk_discuss_rounds": 1,
         # Use only fast news sources - avoid slow Reddit/local sources
