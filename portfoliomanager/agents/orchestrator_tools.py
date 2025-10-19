@@ -174,3 +174,114 @@ def get_recently_analyzed_stocks(days: Annotated[int, "Number of days to look ba
         "total_count": 0
     }
 
+
+@tool
+def place_buy_order(
+    ticker: Annotated[str, "Stock ticker symbol to buy"],
+    order_value: Annotated[float, "Dollar amount to invest (e.g., 1000.0)"],
+    reasoning: Annotated[str, "Detailed reasoning for this BUY decision"]
+) -> str:
+    """
+    Place a BUY order for a stock.
+    
+    Use this after reviewing analysis reports and deciding to buy based on:
+    - TradingAgents analysis recommendations
+    - Current portfolio state and diversification
+    - Available cash and buying power
+    - Market conditions
+    
+    ⚠️ IMPORTANT CHECKS:
+    - Verify you have sufficient buying power
+    - Check if you already have a position in this stock
+    - Check if there's already a pending BUY order for this stock
+    - Consider portfolio concentration limits
+    
+    Args:
+        ticker: Stock ticker to buy (e.g., "AAPL", "TSLA")
+        order_value: Dollar amount to invest (minimum $1000)
+        reasoning: Why you're buying this stock
+        
+    Returns:
+        Confirmation message with order details
+    """
+    # This will be intercepted by the manager to execute actual trade
+    return f"BUY order placed for {ticker} (${order_value:,.2f}). Reasoning: {reasoning}"
+
+
+@tool
+def place_sell_order(
+    ticker: Annotated[str, "Stock ticker symbol to sell"],
+    quantity: Annotated[int, "Number of shares to sell, or 'all' to sell entire position"],
+    reasoning: Annotated[str, "Detailed reasoning for this SELL decision"]
+) -> str:
+    """
+    Place a SELL order for a stock you currently hold.
+    
+    Use this after reviewing analysis reports and deciding to sell based on:
+    - TradingAgents analysis recommendations
+    - Position performance and profit/loss
+    - Risk management considerations
+    - Portfolio rebalancing needs
+    
+    ⚠️ IMPORTANT CHECKS:
+    - Verify you have a position in this stock
+    - Check if there's already a pending SELL order for this stock
+    - Consider tax implications of selling
+    
+    Args:
+        ticker: Stock ticker to sell (e.g., "AAPL", "TSLA")
+        quantity: Number of shares to sell (use "all" to sell entire position)
+        reasoning: Why you're selling this stock
+        
+    Returns:
+        Confirmation message with order details
+    """
+    # This will be intercepted by the manager to execute actual trade
+    return f"SELL order placed for {ticker} ({quantity} shares). Reasoning: {reasoning}"
+
+
+@tool
+def cancel_order(
+    ticker: Annotated[str, "Stock ticker symbol of order to cancel"],
+    reasoning: Annotated[str, "Why you're canceling this order"]
+) -> str:
+    """
+    Cancel a pending order for a stock.
+    
+    Use this when:
+    - Market conditions have changed since order was placed
+    - Analysis indicates the order is no longer advisable
+    - You want to modify order parameters (cancel then replace)
+    - Order has been pending too long and unlikely to fill
+    
+    ⚠️ NOTE: Only pending orders can be cancelled. Filled orders cannot be reversed.
+    
+    Args:
+        ticker: Stock ticker of the order to cancel
+        reasoning: Why you're canceling the order
+        
+    Returns:
+        Confirmation message
+    """
+    # This will be intercepted by the manager to cancel actual order
+    return f"Order for {ticker} cancelled. Reasoning: {reasoning}"
+
+
+@tool
+def review_and_decide() -> str:
+    """
+    Signal that you've reviewed all analysis and made your trading decisions.
+    
+    Use this when:
+    - You've reviewed all stock analyses
+    - You've made all trading decisions (buy/sell/hold)
+    - You're ready to complete this iteration
+    
+    This marks the end of the decision-making process for this iteration.
+    
+    Returns:
+        Confirmation message
+    """
+    # This signals to the manager that the LLM is done making decisions
+    return "Decision-making complete. Ready to proceed to next iteration."
+

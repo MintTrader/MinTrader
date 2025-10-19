@@ -23,13 +23,17 @@ from .agents.orchestrator_tools import (
     request_stock_analysis,
     read_analysis_report,
     get_analysis_status,
-    get_recently_analyzed_stocks
+    get_recently_analyzed_stocks,
+    place_buy_order,
+    place_sell_order,
+    cancel_order as cancel_order_tool,
+    review_and_decide
 )
 from .agents.utils.portfolio_management_tools import (
     get_account_info, get_current_positions, get_position_details,
     get_last_iteration_summary, get_trading_constraints,
     execute_trade, get_open_orders,
-    get_all_orders, cancel_order, modify_order
+    get_all_orders, cancel_order as cancel_order_pm, modify_order
 )
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators
@@ -104,6 +108,11 @@ class OrchestratorPortfolioManager:
             read_analysis_report,
             get_analysis_status,
             get_recently_analyzed_stocks,
+            # Trading execution tools (NEW!)
+            place_buy_order,
+            place_sell_order,
+            cancel_order_tool,
+            review_and_decide,
             # Portfolio management tools
             get_account_info,
             get_current_positions,
@@ -112,7 +121,7 @@ class OrchestratorPortfolioManager:
             get_trading_constraints,
             get_open_orders,
             get_all_orders,
-            cancel_order,
+            cancel_order_pm,
             modify_order,
             execute_trade,
             # Stock analysis tools
@@ -121,6 +130,9 @@ class OrchestratorPortfolioManager:
         ]
         self.tool_node = ToolNode(self.tools)
         
+        # Track trades executed by LLM
+        self.trades_executed: List[Dict[str, Any]] = []
+        
         self.logger.log_system("Orchestrator Portfolio Manager initialized successfully")
     
     def run_iteration(self):
@@ -128,6 +140,22 @@ class OrchestratorPortfolioManager:
         try:
             # Log start
             self.logger.log_system(f"Starting portfolio management iteration {self.iteration_id}")
+            
+            # STEP 0: Retrieve last iteration summary
+            self.logger.log_system("\n=== STEP 0: Retrieving Last Iteration Summary ===")
+            last_summary = self.s3_client.get_last_summary()
+            if last_summary:
+                self.logger.log_system("✅ Retrieved previous iteration summary from S3")
+                self.logger.log_system("Previous iteration highlights:")
+                # Log key parts of the summary
+                for line in last_summary.split('\n')[:15]:  # Show first 15 lines
+                    if line.strip():
+                        self.logger.log_system(f"  {line}")
+                if len(last_summary.split('\n')) > 15:
+                    self.logger.log_system("  ... (see full summary in S3)")
+            else:
+                self.logger.log_system("ℹ️  No previous iteration summary found (first run)")
+                last_summary = "No previous iteration data available."
             
             # STEP 1: Gather all portfolio information
             self.logger.log_system("\n=== STEP 1: Gathering Portfolio Information ===")
@@ -165,7 +193,7 @@ class OrchestratorPortfolioManager:
             # STEP 4: Decide which stocks to analyze (0-3)
             self.logger.log_system("\n=== STEP 4: Selecting Stocks for Analysis ===")
             stocks_to_analyze = self._decide_stocks_to_analyze(
-                account, positions, open_orders, market_context, recent_analysis
+                account, positions, open_orders, market_context, recent_analysis, last_summary
             )
             self.logger.log_system(f"Selected {len(stocks_to_analyze)} stocks for analysis: {stocks_to_analyze}")
             
@@ -174,24 +202,38 @@ class OrchestratorPortfolioManager:
             for ticker in stocks_to_analyze:
                 self._handle_analysis_request(ticker, f"Selected for analysis based on portfolio review")
             
-            # STEP 6: Review analysis and make trading decisions
-            self.logger.log_system("\n=== STEP 6: Making Trading Decisions ===")
-            trades_executed = self._execute_trading_decisions(
-                account, positions, market_open, market_context
+            # STEP 6: LLM reviews analysis and makes trading decisions using tools
+            self.logger.log_system("\n=== STEP 6: LLM Making Trading Decisions ===")
+            self._llm_trading_decisions(
+                account, positions, open_orders, market_open, market_context, last_summary
             )
+            
+            # Refresh open orders after trades
+            from tradingagents.dataflows.alpaca_trading import get_open_orders as get_alpaca_open_orders
+            updated_open_orders = get_alpaca_open_orders()
             
             # STEP 7: Final summary
             self.logger.log_system("\n=== STEP 7: Iteration Summary ===")
             self.logger.log_system(f"✅ Stocks analyzed: {len(stocks_to_analyze)}")
-            self.logger.log_system(f"✅ Trades executed: {trades_executed}")
-            self.logger.log_system(f"✅ Open orders: {len(open_orders)} (will be monitored next run)")
+            self.logger.log_system(f"✅ Trades executed by LLM: {len(self.trades_executed)}")
+            self.logger.log_system(f"✅ Open orders: {len(updated_open_orders)}")
+            
+            if updated_open_orders:
+                self.logger.log_system("\n📋 Pending Orders (to be monitored next run):")
+                for order in updated_open_orders[:5]:  # Show first 5
+                    self.logger.log_system(
+                        f"   - {order.get('symbol')}: {order.get('side')} {order.get('qty')} "
+                        f"@ ${order.get('limit_price', 'market')} (Status: {order.get('status')})"
+                    )
+                if len(updated_open_orders) > 5:
+                    self.logger.log_system(f"   ... and {len(updated_open_orders) - 5} more")
             
             # Upload reports to S3
             self.logger.log_system("\nUploading reports to S3...")
             self.upload_to_s3()
             
             # Generate and save iteration summary
-            summary = self.generate_iteration_summary()
+            summary = self.generate_iteration_summary(updated_open_orders)
             self.s3_client.save_summary(summary, self.iteration_id)
             
             self.logger.log_system("✅ Iteration complete. Check message_tool.log for details.")
@@ -314,27 +356,6 @@ class OrchestratorPortfolioManager:
         except Exception as e:
             return f"❌ Error reading report: {str(e)}"
     
-    def _truncate_context(self, messages: List) -> List:
-        """
-        Truncate message history to prevent exponential context growth.
-        Keeps first message (system prompt) and recent messages.
-        
-        Args:
-            messages: List of messages
-            
-        Returns:
-            Truncated message list
-        """
-        if not self.enable_context_truncation:
-            return messages
-            
-        if len(messages) <= self.max_context_messages:
-            return messages
-        
-        # Keep system message (index 0) + recent messages
-        self.logger.log_system(f"🔧 Truncating context: {len(messages)} → {self.max_context_messages} messages")
-        return [messages[0]] + messages[-(self.max_context_messages-1):]
-    
     def _handle_analysis_status(self) -> Dict[str, Any]:
         """Get current analysis status."""
         return {
@@ -381,7 +402,7 @@ class OrchestratorPortfolioManager:
         query = " | ".join(query_parts)
         return query
     
-    def _decide_stocks_to_analyze(self, account, positions, open_orders, market_context, recent_analysis) -> List[str]:
+    def _decide_stocks_to_analyze(self, account, positions, open_orders, market_context, recent_analysis, last_summary) -> List[str]:
         """
         Use LLM to decide which 0-3 stocks to analyze.
         
@@ -391,6 +412,7 @@ class OrchestratorPortfolioManager:
             open_orders: Open orders
             market_context: Web search results
             recent_analysis: Recently analyzed stocks
+            last_summary: Previous iteration summary
             
         Returns:
             List of 0-3 ticker symbols to analyze
@@ -398,9 +420,21 @@ class OrchestratorPortfolioManager:
         # Build context for LLM
         context_parts = []
         
+        # Previous iteration context
+        if last_summary and "No previous iteration" not in last_summary:
+            context_parts.append("=== PREVIOUS ITERATION SUMMARY ===")
+            # Extract key info from last summary
+            summary_lines = last_summary.split('\n')
+            for line in summary_lines[:10]:  # First 10 lines usually have key info
+                if line.strip():
+                    context_parts.append(line)
+            context_parts.append("")
+        
         # Account info
+        context_parts.append("=== CURRENT ACCOUNT STATE ===")
         context_parts.append(f"Cash: ${account.get('cash', 0):,.2f}")
         context_parts.append(f"Buying Power: ${account.get('buying_power', 0):,.2f}")
+        context_parts.append(f"Portfolio Value: ${account.get('portfolio_value', 0):,.2f}")
         
         # Positions
         if positions:
@@ -411,11 +445,15 @@ class OrchestratorPortfolioManager:
         else:
             context_parts.append("\nNo current positions")
         
-        # Open orders
+        # Open orders (IMPORTANT: may not fill immediately)
         if open_orders:
-            context_parts.append(f"\nPending Orders ({len(open_orders)}):")
+            context_parts.append(f"\nPending Orders ({len(open_orders)}) - MAY NOT BE FILLED YET:")
             for o in open_orders:
-                context_parts.append(f"  - {o['symbol']}: {o['side']} {o['qty']} @ ${o.get('limit_price', 'market')}")
+                context_parts.append(
+                    f"  - {o['symbol']}: {o['side']} {o['qty']} @ ${o.get('limit_price', 'market')} "
+                    f"(Status: {o.get('status', 'pending')})"
+                )
+            context_parts.append("⚠️  These orders may fill in the future - consider this when making decisions")
         else:
             context_parts.append("\nNo pending orders")
         
@@ -426,9 +464,9 @@ class OrchestratorPortfolioManager:
                 context_parts.append(f"  - {ra['ticker']}: {ra['decision']} ({ra['days_ago']} days ago)")
         
         # Market context
-        context_parts.append(f"\nMarket Context:\n{market_context[:1000]}")  # Limit size
+        context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:1000]}")  # Limit size
         
-        prompt = f"""Based on the portfolio state and market context, select 0-3 stocks to analyze for trading.
+        prompt = f"""Based on the portfolio state, pending orders, and market context, select 0-3 stocks to analyze for trading.
 
 {chr(10).join(context_parts)}
 
@@ -436,8 +474,15 @@ RULES:
 - Maximum 3 stocks to analyze
 - Prioritize: positions showing losses, new opportunities, stocks not recently analyzed
 - Avoid: stocks analyzed in past 7 days (unless major news)
-- Consider: pending orders (check if we should cancel/modify)
+- Consider: pending orders may fill later - don't double-order the same stock
 - Can select 0 stocks if portfolio is well-positioned
+
+IMPORTANT: Pending orders may not be filled immediately. They could fill:
+- Later today (if market is open)
+- Tomorrow (if market is closed)
+- Never (if price doesn't reach limit)
+
+Consider this when making new decisions.
 
 Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] for no stocks.
 """
@@ -470,61 +515,286 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
             self.logger.log_system(f"⚠️  Error deciding stocks: {e}, analyzing no stocks")
             return []
     
-    def _execute_trading_decisions(self, account, positions, market_open, market_context) -> int:
+    def _llm_trading_decisions(self, account, positions, open_orders, market_open, market_context, last_summary):
         """
-        Review analysis reports and execute trading decisions.
+        Let LLM review analysis and make trading decisions using tools.
+        
+        The LLM has access to:
+        1. TradingAgents analysis reports (via read_analysis_report tool)
+        2. Portfolio state (via get_account_info, get_current_positions tools)
+        3. Previous iteration summary
+        4. Trading execution tools (place_buy_order, place_sell_order, cancel_order)
+        
+        The LLM will:
+        - Review all analyzed stocks
+        - Consider current portfolio state and pending orders
+        - Use tools to execute trades
+        - Signal completion with review_and_decide tool
         
         Args:
             account: Account information
             positions: Current positions
+            open_orders: Current open orders
             market_open: Whether market is open
-            market_context: Web search results
+            market_context: Web search results  
+            last_summary: Previous iteration summary
+        """
+        # Build prompt for LLM
+        prompt_parts = []
+        
+        prompt_parts.append("=== TRADING DECISION PHASE ===\n")
+        prompt_parts.append("You've completed stock analysis. Now review the results and make trading decisions.\n")
+        
+        # Summarize what was analyzed
+        if self.analyzed_stocks:
+            prompt_parts.append(f"\n📊 STOCKS ANALYZED THIS ITERATION:")
+            for ticker, info in self.analyzed_stocks.items():
+                prompt_parts.append(f"  - {ticker}: Analysis complete")
+            prompt_parts.append(f"\nUse read_analysis_report(ticker, 'final_trade_decision') to review each analysis.")
+        else:
+            prompt_parts.append("\nNo new stocks analyzed this iteration.")
+        
+        # Portfolio state
+        prompt_parts.append(f"\n💰 ACCOUNT STATE:")
+        prompt_parts.append(f"  - Cash: ${account.get('cash', 0):,.2f}")
+        prompt_parts.append(f"  - Buying Power: ${account.get('buying_power', 0):,.2f}")
+        prompt_parts.append(f"  - Portfolio Value: ${account.get('portfolio_value', 0):,.2f}")
+        
+        if positions:
+            prompt_parts.append(f"\n📈 CURRENT POSITIONS ({len(positions)}):")
+            for p in positions[:5]:
+                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
+                prompt_parts.append(
+                    f"  - {p['symbol']}: {p['qty']} shares, ${p.get('market_value', 0):,.2f} ({pnl_pct:+.1f}%)"
+                )
+            if len(positions) > 5:
+                prompt_parts.append(f"  ... and {len(positions) - 5} more (use get_current_positions for full list)")
+        
+        if open_orders:
+            prompt_parts.append(f"\n⚠️  PENDING ORDERS ({len(open_orders)}) - MAY NOT BE FILLED YET:")
+            for o in open_orders[:5]:
+                prompt_parts.append(
+                    f"  - {o['symbol']}: {o['side']} {o['qty']} @ ${o.get('limit_price', 'market')} "
+                    f"(Status: {o.get('status', 'pending')})"
+                )
+            if len(open_orders) > 5:
+                prompt_parts.append(f"  ... and {len(open_orders) - 5} more (use get_open_orders for full list)")
+            prompt_parts.append("\n⚠️  Don't place duplicate orders for stocks with pending orders!")
+        
+        prompt_parts.append(f"\nMarket Status: {'OPEN' if market_open else 'CLOSED (orders will queue)'}")
+        
+        # Instructions
+        prompt_parts.append("\n" + "="*60)
+        prompt_parts.append("YOUR TASK:")
+        prompt_parts.append("="*60)
+        prompt_parts.append("1. Review analysis reports for analyzed stocks using read_analysis_report")
+        prompt_parts.append("2. Consider TradingAgents recommendations AND current portfolio state")
+        prompt_parts.append("3. Make trading decisions using these tools:")
+        prompt_parts.append("   - place_buy_order(ticker, order_value, reasoning)")
+        prompt_parts.append("   - place_sell_order(ticker, quantity, reasoning)")
+        prompt_parts.append("   - cancel_order(ticker, reasoning) - for pending orders")
+        prompt_parts.append("4. When done, call review_and_decide() to complete")
+        
+        prompt_parts.append("\nIMPORTANT RULES:")
+        prompt_parts.append("- You can trade based on analysis AND/OR portfolio state")
+        prompt_parts.append("- Check for existing positions before buying")
+        prompt_parts.append("- Check for pending orders to avoid duplicates")
+        prompt_parts.append("- Consider diversification and risk management")
+        prompt_parts.append("- Provide clear reasoning for each trade")
+        prompt_parts.append("- It's OK to make 0 trades if nothing is actionable")
+        
+        prompt = "\n".join(prompt_parts)
+        
+        # Let LLM make decisions using tools
+        self.logger.log_system("Invoking LLM to make trading decisions...")
+        
+        try:
+            messages = [HumanMessage(content=prompt)]
+            max_iterations = 20  # Prevent infinite loops
+            
+            for iteration in range(max_iterations):
+                # Invoke LLM agent
+                response = self.orchestrator_agent.invoke({"messages": messages})
+                
+                # Get the latest message
+                latest_message = response["messages"][-1]
+                messages.append(latest_message)
+                
+                self.logger.log_system(f"\n[Iteration {iteration + 1}] LLM: {latest_message.content[:200]}...")
+                
+                # Check if LLM wants to use tools
+                if hasattr(latest_message, 'tool_calls') and latest_message.tool_calls:
+                    # Process tool calls
+                    for tool_call in latest_message.tool_calls:
+                        tool_name = tool_call['name']
+                        tool_args = tool_call['args']
+                        
+                        self.logger.log_system(f"  🔧 Tool call: {tool_name}({tool_args})")
+                        
+                        # Handle trading tools
+                        result = self._handle_llm_tool_call(tool_name, tool_args, account, positions, open_orders, market_open)
+                        
+                        # Add tool response to messages
+                        messages.append(ToolMessage(content=str(result), tool_call_id=tool_call['id']))
+                        
+                        # Check if done
+                        if tool_name == 'review_and_decide':
+                            self.logger.log_system("✅ LLM completed trading decisions")
+                            return
+                else:
+                    # No more tool calls, done
+                    self.logger.log_system("✅ LLM completed trading decisions (no more tool calls)")
+                    return
+            
+            self.logger.log_system("⚠️  Reached maximum iterations, ending decision phase")
+            
+        except Exception as e:
+            self.logger.log_system(f"❌ Error in LLM trading decisions: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _handle_llm_tool_call(self, tool_name: str, tool_args: Dict, account, positions, open_orders, market_open) -> str:
+        """
+        Handle tool calls from the LLM during trading decision phase.
+        
+        Args:
+            tool_name: Name of the tool being called
+            tool_args: Arguments for the tool
+            account: Account information
+            positions: Current positions
+            open_orders: Current open orders
+            market_open: Whether market is open
             
         Returns:
-            Number of trades executed
+            Tool result message
         """
-        trades_executed = 0
+        from tradingagents.dataflows.alpaca_trading import place_market_order, cancel_order as cancel_alpaca_order
         
-        # Review each analyzed stock
-        for ticker in self.analyzed_stocks:
-            self.logger.log_system(f"\n--- Reviewing {ticker} ---")
-            
-            # Read the final trade decision
-            decision_report = self._handle_read_report(ticker, 'final_trade_decision')
-            investment_plan = self._handle_read_report(ticker, 'investment_plan')
-            
-            # Check if report indicates BUY or SELL
-            if "Decision: BUY" in decision_report or "**BUY**" in decision_report:
-                action = "BUY"
-            elif "Decision: SELL" in decision_report or "**SELL**" in decision_report:
-                action = "SELL"
-            else:
-                action = "HOLD"
-                self.logger.log_system(f"  Decision: HOLD - no action needed")
-                continue
-            
-            self.logger.log_system(f"  Analysis recommends: {action}")
-            
-            # Execute the trade (simplified - could add more logic here)
-            if action == "BUY":
-                # Check if we have cash
-                available_cash = account.get('buying_power', 0)
-                if available_cash > 1000:  # Minimum $1000 per trade
-                    self.logger.log_system(f"  ✅ Placing BUY order for {ticker} (market {'open' if market_open else 'CLOSED - will queue'})")
-                    trades_executed += 1
-                else:
-                    self.logger.log_system(f"  ⚠️  Insufficient cash for BUY ({available_cash:,.2f})")
-                    
-            elif action == "SELL":
-                # Check if we have position
-                has_position = any(p.get('symbol') == ticker for p in positions)
-                if has_position:
-                    self.logger.log_system(f"  ✅ Placing SELL order for {ticker} (market {'open' if market_open else 'CLOSED - will queue'})")
-                    trades_executed += 1
-                else:
-                    self.logger.log_system(f"  ⚠️  No position to SELL for {ticker}")
+        # Handle analysis reading tools
+        if tool_name == 'read_analysis_report':
+            ticker = str(tool_args.get('ticker', ''))
+            report_type = str(tool_args.get('report_type', ''))
+            return self._handle_read_report(ticker, report_type)
         
-        return trades_executed
+        elif tool_name == 'get_analysis_status':
+            return str(self._handle_analysis_status())
+        
+        # Handle trading execution tools
+        elif tool_name == 'place_buy_order':
+            ticker = tool_args.get('ticker')
+            order_value = tool_args.get('order_value')
+            reasoning = tool_args.get('reasoning')
+            
+            # Validation
+            available_cash = float(account.get('buying_power', 0))
+            order_value = float(order_value)
+            if order_value > available_cash:
+                return f"❌ Insufficient funds. Have ${available_cash:,.2f}, trying to invest ${order_value:,.2f}"
+            
+            if order_value < 1000:
+                return f"❌ Order value too small. Minimum $1,000, got ${order_value:,.2f}"
+            
+            # Check for existing position
+            has_position = any(p.get('symbol') == ticker for p in positions)
+            if has_position:
+                return f"⚠️  Already have position in {ticker}. Consider if you want to add to position."
+            
+            # Check for pending order
+            has_pending = any(o.get('symbol') == ticker for o in open_orders)
+            if has_pending:
+                return f"⚠️  Already have pending order for {ticker}. Avoid duplicate orders."
+            
+            # Execute trade (or log for now)
+            self.logger.log_system(f"💵 BUY: {ticker} for ~${order_value:,.2f}")
+            self.logger.log_system(f"   Reasoning: {reasoning}")
+            self.logger.log_system(f"   Market: {'OPEN' if market_open else 'CLOSED - will queue'}")
+            
+            # Track trade
+            self.trades_executed.append({
+                'action': 'BUY',
+                'ticker': ticker,
+                'value': order_value,
+                'reasoning': reasoning
+            })
+            
+            # Uncomment for actual execution:
+            # try:
+            #     # Calculate shares based on current price
+            #     qty = calculate_qty_from_value(ticker, order_value)
+            #     place_market_order(ticker, qty=qty, side='buy')
+            # except Exception as e:
+            #     return f"❌ Error executing BUY: {e}"
+            
+            return f"✅ BUY order placed for {ticker} (~${order_value:,.2f}). {'Will execute when market opens.' if not market_open else 'Executing now.'}"
+        
+        elif tool_name == 'place_sell_order':
+            ticker = tool_args.get('ticker')
+            quantity = tool_args.get('quantity')
+            reasoning = tool_args.get('reasoning')
+            
+            # Find position
+            position = next((p for p in positions if p.get('symbol') == ticker), None)
+            if not position:
+                return f"❌ No position found for {ticker}. Cannot sell."
+            
+            # Check quantity
+            available_qty = position.get('qty', 0)
+            if quantity == "all":
+                quantity = available_qty
+            elif quantity > available_qty:
+                return f"❌ Trying to sell {quantity} shares but only have {available_qty}"
+            
+            # Execute trade (or log for now)
+            self.logger.log_system(f"💸 SELL: {ticker} ({quantity} shares)")
+            self.logger.log_system(f"   Reasoning: {reasoning}")
+            self.logger.log_system(f"   Market: {'OPEN' if market_open else 'CLOSED - will queue'}")
+            
+            # Track trade
+            self.trades_executed.append({
+                'action': 'SELL',
+                'ticker': ticker,
+                'quantity': quantity,
+                'reasoning': reasoning
+            })
+            
+            # Uncomment for actual execution:
+            # try:
+            #     place_market_order(ticker, qty=quantity, side='sell')
+            # except Exception as e:
+            #     return f"❌ Error executing SELL: {e}"
+            
+            return f"✅ SELL order placed for {ticker} ({quantity} shares). {'Will execute when market opens.' if not market_open else 'Executing now.'}"
+        
+        elif tool_name == 'cancel_order':
+            ticker = tool_args.get('ticker')
+            reasoning = tool_args.get('reasoning')
+            
+            # Find pending order
+            order = next((o for o in open_orders if o.get('symbol') == ticker), None)
+            if not order:
+                return f"❌ No pending order found for {ticker}"
+            
+            order_id = order.get('id')
+            
+            # Cancel order (or log for now)
+            self.logger.log_system(f"🚫 CANCEL: Order for {ticker}")
+            self.logger.log_system(f"   Reasoning: {reasoning}")
+            
+            # Uncomment for actual execution:
+            # try:
+            #     cancel_alpaca_order(order_id)
+            # except Exception as e:
+            #     return f"❌ Error cancelling order: {e}"
+            
+            return f"✅ Order for {ticker} cancelled."
+        
+        elif tool_name == 'review_and_decide':
+            self.logger.log_system("✅ LLM signaled completion of trading decisions")
+            return "Trading decision phase complete."
+        
+        # If tool not recognized, return generic message
+        else:
+            return f"Tool {tool_name} called with args: {tool_args}"
     
     def _handle_web_search(self, query: str) -> str:
         """
@@ -563,7 +833,11 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
     
     def _handle_recently_analyzed_stocks(self, days_threshold: int = 14) -> Dict[str, Any]:
         """
-        Get list of stocks that were recently analyzed.
+        Get list of stocks that were recently analyzed from S3 and local storage.
+        
+        This method fetches the stock evaluation history before running the main LLM call,
+        creating a mapping of which stocks were analyzed recently to help the LLM make
+        informed decisions about what to analyze next.
         
         Args:
             days_threshold: Number of days to look back
@@ -575,76 +849,130 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
         from pathlib import Path
         
         recently_analyzed = []
-        
-        if not self.results_dir.exists():
-            return {
-                "recently_analyzed": [],
-                "days_threshold": days_threshold,
-                "total_count": 0
-            }
-        
-        # Get current date
         now = datetime.now()
         cutoff_date = now - timedelta(days=days_threshold)
         
-        # Scan all ticker directories
+        # STEP 1: Fetch from S3 (primary source)
+        self.logger.log_system("Fetching stock analysis history from S3...")
         try:
-            for ticker_dir in self.results_dir.iterdir():
-                if not ticker_dir.is_dir():
-                    continue
-                
-                # Skip portfolio_manager directory
-                if ticker_dir.name == 'portfolio_manager':
-                    continue
-                
-                ticker = ticker_dir.name
-                
-                # Check if this ticker has recent analysis
-                try:
-                    for date_dir in ticker_dir.iterdir():
-                        if not date_dir.is_dir():
-                            continue
+            s3_history = self.s3_client.get_analyzed_stocks_history(days_threshold)
+            
+            for ticker, date_list in s3_history.items():
+                if date_list:
+                    # Get the most recent date for this ticker
+                    most_recent_date = date_list[0]  # Already sorted in descending order
+                    
+                    try:
+                        folder_date = datetime.strptime(most_recent_date, "%Y-%m-%d")
+                        days_ago = (now - folder_date).days
                         
-                        try:
-                            # Parse folder name as date (format: YYYY-MM-DD)
-                            folder_date = datetime.strptime(date_dir.name, "%Y-%m-%d")
+                        # Fetch decision from S3
+                        decision = self.s3_client.get_stock_analysis_decision(ticker, most_recent_date)
+                        
+                        recently_analyzed.append({
+                            'ticker': ticker,
+                            'date': most_recent_date,
+                            'decision': decision,
+                            'days_ago': days_ago,
+                            'source': 'S3'
+                        })
+                        
+                    except ValueError:
+                        continue
+                        
+            self.logger.log_system(f"Found {len(recently_analyzed)} stocks from S3")
+            
+        except Exception as e:
+            self.logger.log_system(f"⚠️  Error fetching from S3: {e}")
+        
+        # STEP 2: Supplement with local data (fallback/additional)
+        # This catches any analyses that haven't been uploaded to S3 yet
+        if self.results_dir.exists():
+            try:
+                local_tickers = set()
+                
+                for ticker_dir in self.results_dir.iterdir():
+                    if not ticker_dir.is_dir():
+                        continue
+                    
+                    # Skip portfolio_manager directory
+                    if ticker_dir.name == 'portfolio_manager':
+                        continue
+                    
+                    ticker = ticker_dir.name
+                    
+                    # Skip if already found in S3
+                    if any(item['ticker'] == ticker for item in recently_analyzed):
+                        continue
+                    
+                    # Check if this ticker has recent analysis
+                    try:
+                        for date_dir in ticker_dir.iterdir():
+                            if not date_dir.is_dir():
+                                continue
                             
-                            # If analysis date is after cutoff, add to list
-                            if folder_date >= cutoff_date:
-                                # Try to read the decision from final_trade_decision.md
-                                decision_file = date_dir / "reports" / "final_trade_decision.md"
-                                decision = "UNKNOWN"
+                            try:
+                                # Parse folder name as date (format: YYYY-MM-DD)
+                                folder_date = datetime.strptime(date_dir.name, "%Y-%m-%d")
                                 
-                                if decision_file.exists():
-                                    content = decision_file.read_text(encoding='utf-8')
-                                    # Try to extract decision from content
-                                    if "**Decision: BUY**" in content or "Decision: BUY" in content:
-                                        decision = "BUY"
-                                    elif "**Decision: SELL**" in content or "Decision: SELL" in content:
-                                        decision = "SELL"
-                                    elif "**Decision: HOLD**" in content or "Decision: HOLD" in content:
-                                        decision = "HOLD"
-                                
-                                recently_analyzed.append({
-                                    'ticker': ticker,
-                                    'date': date_dir.name,
-                                    'decision': decision,
-                                    'days_ago': (now - folder_date).days
-                                })
-                                break  # Only take the most recent analysis for each ticker
-                                
-                        except ValueError:
-                            # Skip folders that don't match date format
-                            continue
-                except Exception:
-                    # If error reading ticker directory, skip it
-                    continue
-        except Exception:
-            # If any error scanning results directory
-            pass
+                                # If analysis date is after cutoff, add to list
+                                if folder_date >= cutoff_date:
+                                    # Try to read the decision from final_trade_decision.md
+                                    decision_file = date_dir / "reports" / "final_trade_decision.md"
+                                    decision = "UNKNOWN"
+                                    
+                                    if decision_file.exists():
+                                        content = decision_file.read_text(encoding='utf-8')
+                                        # Try to extract decision from content
+                                        if "**Decision: BUY**" in content or "Decision: BUY" in content:
+                                            decision = "BUY"
+                                        elif "**Decision: SELL**" in content or "Decision: SELL" in content:
+                                            decision = "SELL"
+                                        elif "**Decision: HOLD**" in content or "Decision: HOLD" in content:
+                                            decision = "HOLD"
+                                    
+                                    recently_analyzed.append({
+                                        'ticker': ticker,
+                                        'date': date_dir.name,
+                                        'decision': decision,
+                                        'days_ago': (now - folder_date).days,
+                                        'source': 'Local'
+                                    })
+                                    local_tickers.add(ticker)
+                                    break  # Only take the most recent analysis for each ticker
+                                    
+                            except ValueError:
+                                # Skip folders that don't match date format
+                                continue
+                    except Exception:
+                        # If error reading ticker directory, skip it
+                        continue
+                        
+                if local_tickers:
+                    self.logger.log_system(f"Found {len(local_tickers)} additional stocks from local storage")
+                    
+            except Exception as e:
+                self.logger.log_system(f"⚠️  Error scanning local storage: {e}")
         
         # Sort by date (most recent first)
         recently_analyzed.sort(key=lambda x: str(x['date']), reverse=True)
+        
+        # Log summary for LLM context
+        summary_lines = []
+        summary_lines.append(f"\n📊 Stock Analysis History (past {days_threshold} days):")
+        summary_lines.append(f"   Total stocks analyzed: {len(recently_analyzed)}")
+        
+        if recently_analyzed:
+            summary_lines.append(f"\n   Recent analyses:")
+            for item in recently_analyzed[:10]:  # Show top 10
+                summary_lines.append(
+                    f"   - {item['ticker']}: {item['decision']} "
+                    f"({item['days_ago']} days ago, from {item['source']})"
+                )
+            if len(recently_analyzed) > 10:
+                summary_lines.append(f"   ... and {len(recently_analyzed) - 10} more")
+        
+        self.logger.log_system('\n'.join(summary_lines))
         
         return {
             "recently_analyzed": recently_analyzed,
@@ -669,31 +997,129 @@ Respond with ONLY a JSON list of ticker symbols, e.g.: ["AAPL", "TSLA"] or [] fo
         except Exception as e:
             self.logger.log_system(f"Error uploading to S3: {e}")
     
-    def generate_iteration_summary(self) -> str:
-        """Generate summary for next iteration"""
+    def generate_iteration_summary(self, open_orders=None) -> str:
+        """
+        Generate summary for next iteration.
+        
+        This summary is saved to S3 and retrieved by the next iteration to maintain
+        context about portfolio state, pending orders, and recent decisions.
+        
+        Args:
+            open_orders: Current open orders to include in summary
+            
+        Returns:
+            Summary string
+        """
         account = get_account()
         positions = get_positions()
         
         summary_lines = [
             f"ITERATION: {self.iteration_id}",
             f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"\nPORTFOLIO STATE:",
+            f"\n{'='*60}",
+            f"PORTFOLIO STATE:",
+            f"{'='*60}",
             f"- Total Value: ${account.get('portfolio_value', 0):,.2f}",
             f"- Cash: ${account.get('cash', 0):,.2f}",
+            f"- Buying Power: ${account.get('buying_power', 0):,.2f}",
             f"- Positions: {len(positions)}",
-            f"\nANALYSIS SUMMARY:",
-            f"- Stocks Analyzed: {self.analyses_requested}/{self.max_analyses}",
-            f"- Tickers: {', '.join(self.analyzed_stocks.keys()) if self.analyzed_stocks else 'None'}",
-            f"\nCOST OPTIMIZATION METRICS:",
-            f"- Workflow: Single-pass (no iteration loop)",
-            f"- Web Searches Used: {self.web_searches_used}/1 (single comprehensive search)",
-            f"- LLM Model: gpt-4.1-nano (maximum cost optimization)",
-            f"- Analysts per Stock: 2 (market + news)",
-            f"- Debate Rounds: 1 (minimized)",
-            f"- Total LLM Calls: ~{3 + (len(self.analyzed_stocks) * 10)} (orchestrator + {len(self.analyzed_stocks)} stocks × ~10 calls each)",
-            f"\nStrategy: LLM-driven with controlled web search usage",
-            f"Focus: Maximize profits through informed, cost-effective analysis"
         ]
+        
+        # Add position details
+        if positions:
+            summary_lines.append(f"\nCurrent Positions:")
+            for p in positions[:10]:  # List up to 10 positions
+                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
+                summary_lines.append(
+                    f"  - {p['symbol']}: {p['qty']} shares, "
+                    f"${p.get('market_value', 0):,.2f} ({pnl_pct:+.1f}%)"
+                )
+            if len(positions) > 10:
+                summary_lines.append(f"  ... and {len(positions) - 10} more")
+        
+        # Add pending orders (IMPORTANT for next iteration)
+        if open_orders:
+            summary_lines.append(f"\n{'='*60}")
+            summary_lines.append(f"PENDING ORDERS (Monitor in next iteration):")
+            summary_lines.append(f"{'='*60}")
+            summary_lines.append(
+                f"⚠️  {len(open_orders)} order(s) pending - may not be filled yet!"
+            )
+            summary_lines.append("These orders could:")
+            summary_lines.append("  - Fill later today (if market is open)")
+            summary_lines.append("  - Fill tomorrow (if market is closed)")
+            summary_lines.append("  - Never fill (if price doesn't reach limit)")
+            summary_lines.append("")
+            
+            for order in open_orders[:10]:
+                summary_lines.append(
+                    f"  - {order.get('symbol')}: {order.get('side')} {order.get('qty')} "
+                    f"@ ${order.get('limit_price', 'market')} "
+                    f"(Status: {order.get('status', 'pending')}, "
+                    f"ID: {order.get('id', 'N/A')[:8]})"
+                )
+            if len(open_orders) > 10:
+                summary_lines.append(f"  ... and {len(open_orders) - 10} more")
+            
+            summary_lines.append("\n⚠️  NEXT ITERATION ACTION ITEMS:")
+            summary_lines.append("  1. Check if pending orders filled")
+            summary_lines.append("  2. Cancel orders that are no longer relevant")
+            summary_lines.append("  3. Don't place duplicate orders for same stocks")
+        else:
+            summary_lines.append(f"\nNo pending orders")
+        
+        # Analysis summary
+        summary_lines.append(f"\n{'='*60}")
+        summary_lines.append(f"ANALYSIS SUMMARY:")
+        summary_lines.append(f"{'='*60}")
+        summary_lines.append(f"- Stocks Analyzed: {self.analyses_requested}/{self.max_analyses}")
+        
+        if self.analyzed_stocks:
+            summary_lines.append(f"- Tickers Analyzed:")
+            for ticker, info in self.analyzed_stocks.items():
+                summary_lines.append(f"  - {ticker}: {info.get('decision', 'UNKNOWN')}")
+        else:
+            summary_lines.append(f"- No stocks analyzed this iteration")
+        
+        # Trading decisions (made by LLM)
+        if self.trades_executed:
+            summary_lines.append(f"\n{'='*60}")
+            summary_lines.append(f"TRADING DECISIONS (by LLM):")
+            summary_lines.append(f"{'='*60}")
+            summary_lines.append(f"- Total Trades: {len(self.trades_executed)}")
+            for trade in self.trades_executed:
+                if trade['action'] == 'BUY':
+                    summary_lines.append(
+                        f"  - BUY {trade['ticker']}: ${trade.get('value', 0):,.2f}"
+                    )
+                elif trade['action'] == 'SELL':
+                    summary_lines.append(
+                        f"  - SELL {trade['ticker']}: {trade.get('quantity', 0)} shares"
+                    )
+                summary_lines.append(f"    Reasoning: {trade.get('reasoning', 'N/A')[:80]}...")
+        else:
+            summary_lines.append(f"\n- No trades executed this iteration")
+        
+        # Cost metrics
+        summary_lines.append(f"\n{'='*60}")
+        summary_lines.append(f"COST OPTIMIZATION METRICS:")
+        summary_lines.append(f"{'='*60}")
+        summary_lines.append(f"- Workflow: Single-pass (no iteration loop)")
+        summary_lines.append(f"- Web Searches Used: {self.web_searches_used}/1")
+        summary_lines.append(f"- LLM Model: gpt-4.1-nano (cost optimized)")
+        summary_lines.append(f"- Analysts per Stock: 2 (market + news)")
+        summary_lines.append(f"- Total LLM Calls: ~{3 + (len(self.analyzed_stocks) * 10)}")
+        
+        # Strategy notes
+        summary_lines.append(f"\n{'='*60}")
+        summary_lines.append(f"NOTES FOR NEXT ITERATION:")
+        summary_lines.append(f"{'='*60}")
+        if open_orders:
+            summary_lines.append(f"⚠️  Monitor pending orders - they may fill before next run")
+        if self.analyzed_stocks:
+            summary_lines.append(f"✅ Recent analysis available in S3 for: {', '.join(self.analyzed_stocks.keys())}")
+        summary_lines.append(f"Strategy: LLM-driven with controlled costs")
+        summary_lines.append(f"Focus: Maximize profits through informed analysis")
         
         return "\n".join(summary_lines)
 

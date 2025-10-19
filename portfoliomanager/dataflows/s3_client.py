@@ -260,4 +260,114 @@ class S3ReportManager:
         except Exception as e:
             print(f"Error listing reports: {e}")
             return []
+    
+    def get_analyzed_stocks_history(self, days_threshold: int = 14) -> Dict[str, List[str]]:
+        """
+        Fetch all stock tickers and their analysis dates from S3 reports folder.
+        
+        This method scans the S3 bucket's "reports/" folder structure:
+        - Top-level folders are stock ticker names (e.g., AAPL, TSLA)
+        - Second-level folders are dates in YYYY-MM-DD format
+        
+        Args:
+            days_threshold: Number of days to look back (default: 14)
+            
+        Returns:
+            Dictionary mapping ticker symbols to list of analysis dates
+            Example: {'AAPL': ['2025-10-18', '2025-10-15'], 'TSLA': ['2025-10-17']}
+        """
+        try:
+            stock_history = {}
+            
+            # Calculate cutoff date
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() - timedelta(days=days_threshold)
+            
+            # Use paginator to handle large result sets
+            paginator = self.s3_client.get_paginator('list_objects_v2')
+            
+            # List all objects in reports/ folder
+            for page in paginator.paginate(
+                Bucket=self.bucket_name,
+                Prefix='reports/',
+                Delimiter='/'
+            ):
+                # Get ticker folders (CommonPrefixes are the "directories")
+                if 'CommonPrefixes' in page:
+                    for prefix in page['CommonPrefixes']:
+                        # Extract ticker from prefix (e.g., "reports/AAPL/" -> "AAPL")
+                        ticker_path = prefix['Prefix']
+                        ticker = ticker_path.rstrip('/').split('/')[-1]
+                        
+                        # Now get date folders for this ticker
+                        date_folders = []
+                        for date_page in paginator.paginate(
+                            Bucket=self.bucket_name,
+                            Prefix=ticker_path,
+                            Delimiter='/'
+                        ):
+                            if 'CommonPrefixes' in date_page:
+                                for date_prefix in date_page['CommonPrefixes']:
+                                    # Extract date from prefix (e.g., "reports/AAPL/2025-10-18/" -> "2025-10-18")
+                                    date_str = date_prefix['Prefix'].rstrip('/').split('/')[-1]
+                                    
+                                    # Validate date format and check if within threshold
+                                    try:
+                                        analysis_date = datetime.strptime(date_str, "%Y-%m-%d")
+                                        if analysis_date >= cutoff_date:
+                                            date_folders.append(date_str)
+                                    except ValueError:
+                                        # Skip invalid date formats
+                                        continue
+                        
+                        # Add ticker to history if it has analysis dates
+                        if date_folders:
+                            # Sort dates in descending order (most recent first)
+                            date_folders.sort(reverse=True)
+                            stock_history[ticker] = date_folders
+            
+            return stock_history
+            
+        except Exception as e:
+            print(f"Error fetching analyzed stocks history from S3: {e}")
+            return {}
+    
+    def get_stock_analysis_decision(self, ticker: str, date: str) -> str:
+        """
+        Retrieve the trading decision for a specific stock analysis from S3.
+        
+        Args:
+            ticker: Stock ticker symbol
+            date: Analysis date (YYYY-MM-DD)
+            
+        Returns:
+            Decision string ("BUY", "SELL", "HOLD", or "UNKNOWN")
+        """
+        try:
+            s3_key = f"reports/{ticker}/{date}/final_trade_decision.md"
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=s3_key
+            )
+            content = response['Body'].read().decode('utf-8')
+            
+            # Extract decision from content
+            if "**Decision: BUY**" in content or "Decision: BUY" in content:
+                return "BUY"
+            elif "**Decision: SELL**" in content or "Decision: SELL" in content:
+                return "SELL"
+            elif "**Decision: HOLD**" in content or "Decision: HOLD" in content:
+                return "HOLD"
+            else:
+                return "UNKNOWN"
+                
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                return "UNKNOWN"
+            print(f"Error retrieving decision for {ticker} on {date}: {e}")
+            return "UNKNOWN"
+        except Exception as e:
+            print(f"Error retrieving decision for {ticker} on {date}: {e}")
+            return "UNKNOWN"
 
