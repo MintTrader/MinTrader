@@ -60,9 +60,9 @@ PORTFOLIO_CONFIG = {
     "analysis_analysts": ["market", "news"],  # Removed "fundamentals" for cost optimization
     "analysis_config": {
         **DEFAULT_CONFIG,
-        # Use GPT-4.1 nano for all analysis to minimize costs (cheapest model)
-        "deep_think_llm": "gpt-4.1-nano",      # Use nano for all analysis
-        "quick_think_llm": "gpt-4.1-nano",     # Use nano for all analysis
+        # Use GPT-4o-mini for orchestrator (better instruction-following than nano)
+        "deep_think_llm": "gpt-4.1-nano",      # Keep nano for analysis (cost optimization)
+        "quick_think_llm": "gpt-4o-mini",      # Use mini for orchestrator decisions (better instruction-following)
         "backend_url": "https://api.openai.com/v1",
         # Minimize debate rounds to reduce LLM calls
         "max_debate_rounds": 1,

@@ -482,19 +482,25 @@ class OrchestratorPortfolioManager:
                     # Older analyses, can re-analyze
                     stocks_ok_to_reanalyze.append(f"{ticker} (last analyzed {days_ago} days ago)")
         
-        # ========== START PROMPT: EXCLUSION LIST FIRST ==========
+        # ========== START PROMPT: EXCLUSION LIST FIRST AND PROMINENT ==========
         context_parts.append("=" * 80)
-        context_parts.append("🚫 DO NOT SELECT THESE STOCKS - RECENTLY ANALYZED:")
+        context_parts.append("🚨 CRITICAL: DO NOT SELECT THESE STOCKS 🚨")
         context_parts.append("=" * 80)
         
         if stocks_to_exclude:
-            context_parts.append(f"❌ HARD EXCLUDE ({len(stocks_to_exclude)} stocks) - DO NOT select under any circumstances:")
+            # Show simple ticker list first
+            excluded_tickers_str = ", ".join(sorted(stocks_to_exclude))
+            context_parts.append(f"❌ EXCLUDED TICKERS: {excluded_tickers_str}")
+            context_parts.append(f"❌ DO NOT SELECT: {excluded_tickers_str}")
+            context_parts.append(f"❌ NEVER CHOOSE: {excluded_tickers_str}")
+            context_parts.append("")
+            context_parts.append(f"These {len(stocks_to_exclude)} stocks were recently analyzed:")
             for item in sorted(stocks_recently_analyzed_warning):
                 if any(ticker in item for ticker in stocks_to_exclude):
                     context_parts.append(f"   • {item}")
             context_parts.append("")
-            context_parts.append(f"💡 You can still make trades on these stocks using their historical reports!")
-            context_parts.append(f"   Use: read_historical_report(ticker, 'final_trade_decision')")
+            context_parts.append(f"💡 You can still TRADE these stocks using: read_historical_report(ticker, 'final_trade_decision')")
+            context_parts.append(f"💡 But DO NOT select them for NEW analysis!")
         else:
             context_parts.append("✅ No recently analyzed stocks to exclude (all stocks available)")
         
@@ -558,6 +564,18 @@ class OrchestratorPortfolioManager:
         # Market context
         context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:1000]}")  # Limit size
         
+        # Build the exclusion reminder for the task section
+        if stocks_to_exclude:
+            excluded_tickers_str = ", ".join(sorted(stocks_to_exclude))
+            exclusion_reminder = f"""
+🚨🚨🚨 CRITICAL EXCLUSION LIST 🚨🚨🚨
+❌ DO NOT SELECT: {excluded_tickers_str}
+❌ NEVER CHOOSE: {excluded_tickers_str}
+These stocks were analyzed in the past 3 days. DO NOT select them!
+"""
+        else:
+            exclusion_reminder = "✅ No exclusions - all stocks are available for analysis"
+        
         prompt = f"""Based on the portfolio state, pending orders, and market context, select 0-3 stocks to analyze for trading.
 
 {chr(10).join(context_parts)}
@@ -566,8 +584,10 @@ class OrchestratorPortfolioManager:
 YOUR TASK: SELECT 0-3 STOCKS FOR ANALYSIS
 ================================================================================
 
+{exclusion_reminder}
+
 CRITICAL RULES (READ FIRST):
-1. 🚫 NEVER select stocks listed in "HARD EXCLUDE" above
+1. 🚫 NEVER select stocks from the EXCLUSION LIST shown above and at the top
 2. ✅ Maximum 3 stocks total
 3. 💡 You can trade excluded stocks using read_historical_report - no need to re-analyze them
 
@@ -599,11 +619,13 @@ SUGGESTED APPROACH:
 - Consider pending orders (may fill later)
 - New opportunities come from market context research
 
-Respond with ONLY a JSON list of ticker symbols.
+{f"⚠️  FINAL REMINDER - DO NOT INCLUDE THESE TICKERS: {excluded_tickers_str}" if stocks_to_exclude else ""}
+
+Respond with ONLY a JSON list of ticker symbols (must NOT include excluded tickers).
 Examples:
 - ["NVDA", "MSFT"]: Two new stocks to analyze
-- ["AAPL"]: One existing position needing analysis  
-- []: No stocks (if nothing compelling)
+- ["AAPL"]: One existing position needing analysis (only if NOT excluded!)
+- []: No stocks (if nothing compelling or all positions recently analyzed)
 """
         
         try:
@@ -632,8 +654,9 @@ Examples:
                     excluded = [s for s in original_selection if s in stocks_to_exclude]
                     self.logger.log_system(
                         f"⚠️  LLM ignored exclusion list and selected: {excluded}. "
-                        f"Filtered them out (had {len(stocks_to_exclude)} stocks in exclusion list). "
-                        "This should not happen - the prompt needs improvement."
+                        f"Filtered them out (exclusion list: {sorted(list(stocks_to_exclude))}). "
+                        f"The LLM saw the exclusion list 3 times in the prompt but still selected these stocks. "
+                        f"This might indicate the model ({self.llm.model_name}) is not following instructions well."
                     )
                 elif stocks_to_exclude:
                     self.logger.log_system(
