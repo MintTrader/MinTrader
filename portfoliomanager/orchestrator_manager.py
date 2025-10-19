@@ -188,6 +188,9 @@ class OrchestratorPortfolioManager:
             if self.web_search_enabled and web_search_query:
                 market_context = self._handle_web_search(web_search_query)
                 self.logger.log_system(f"✅ Market context gathered ({len(market_context)} chars)")
+                # Log a preview to verify we got useful content
+                preview = market_context[:300].replace('\n', ' ')
+                self.logger.log_system(f"   Preview: {preview}...")
             else:
                 market_context = "Web search disabled. Using portfolio data only."
                 self.logger.log_system("ℹ️  Web search disabled, proceeding with portfolio data")
@@ -427,9 +430,9 @@ class OrchestratorPortfolioManager:
             if order_tickers:
                 query_parts.append(f"Price movement and news on {', '.join(order_tickers)}")
         
-        # If we need new opportunities
+        # If we need new opportunities - BE EXPLICIT about wanting stock tickers
         if not positions or len(positions) < 5:
-            query_parts.append("Top performing stocks with positive momentum")
+            query_parts.append("List specific stock tickers: top 5-10 performing stocks with positive momentum and strong fundamentals today")
         
         # Combine into one query
         query = " | ".join(query_parts)
@@ -561,8 +564,24 @@ class OrchestratorPortfolioManager:
         else:
             context_parts.append("\nNo pending orders")
         
-        # Market context
-        context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:1000]}")  # Limit size
+        # Market context - INCREASED LIMIT to capture stock recommendations
+        # Web search often puts recommendations at the end, so we need more context
+        context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:3000]}")  # Increased from 1000 to 3000 chars
+        
+        # Extract potential stock tickers from market context (simple regex)
+        import re
+        potential_tickers = re.findall(r'\b[A-Z]{2,5}\b', market_context[:3000])
+        # Filter out common words that look like tickers
+        common_words = {'THE', 'AND', 'FOR', 'ARE', 'NOT', 'BUT', 'WITH', 'FROM', 'THIS', 'THAT', 'NYSE', 'NASDAQ', 'ETF', 'IPO', 'CEO', 'CFO', 'USA', 'USD'}
+        potential_tickers = [t for t in potential_tickers if t not in common_words and len(t) <= 5]
+        
+        if potential_tickers:
+            # Show unique tickers (limit to first 20)
+            unique_tickers = list(dict.fromkeys(potential_tickers))[:20]
+            context_parts.append(f"\n💡 STOCK TICKERS FOUND IN MARKET CONTEXT: {', '.join(unique_tickers)}")
+            context_parts.append("   ⬆️  These are potential candidates extracted from the market research above")
+            # Log for debugging
+            self.logger.log_system(f"📊 Extracted {len(unique_tickers)} potential tickers from market context: {', '.join(unique_tickers[:10])}{'...' if len(unique_tickers) > 10 else ''}")
         
         # Build the exclusion reminder for the task section
         if stocks_to_exclude:
@@ -602,10 +621,11 @@ SELECTION STRATEGY - Balance these objectives:
    - Prioritize positions with large gains/losses
 
 2️⃣ NEW INVESTMENT OPPORTUNITIES:
-   - Use market context to find trending/undervalued stocks
+   - USE MARKET CONTEXT BELOW to find specific stock tickers mentioned
+   - Look for stocks with positive momentum + strong fundamentals
+   - The market context may list specific tickers - EXTRACT THEM
    - Consider diversification (avoid sector over-concentration)
-   - Look for positive momentum + strong fundamentals
-   - Check market context for hot sectors or stocks
+   - Pay special attention to the end of market context (contains stock recommendations)
 
 SUGGESTED APPROACH:
 • If 3+ positions NEED ANALYSIS → Select 2-3 of them (portfolio health first)
