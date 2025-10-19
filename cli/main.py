@@ -466,58 +466,26 @@ def get_user_selections():
         )
     )
     selected_research_depth = select_research_depth()
-
-    # Step 5: OpenAI backend
-    console.print(
-        create_question_box(
-            "Step 5: OpenAI backend", "Select which service to talk to"
-        )
-    )
-    selected_llm_provider, backend_url = select_llm_provider()
     
-    # Step 6: Thinking agents
+    # Step 5: Thinking agents (OpenAI only)
     console.print(
         create_question_box(
-            "Step 6: Thinking Agents", "Select your thinking agents for analysis"
+            "Step 5: OpenAI Models", "Select your OpenAI models for analysis"
         )
     )
-    selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
-    selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+    selected_shallow_thinker = select_shallow_thinking_agent()
+    selected_deep_thinker = select_deep_thinking_agent()
 
     return {
         "ticker": selected_ticker,
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
-        "llm_provider": selected_llm_provider.lower(),
-        "backend_url": backend_url,
+        "llm_provider": "openai",
+        "backend_url": "https://api.openai.com/v1",
         "shallow_thinker": selected_shallow_thinker,
         "deep_thinker": selected_deep_thinker,
     }
-
-
-def get_ticker():
-    """Get ticker symbol from user input."""
-    return typer.prompt("", default="SPY")
-
-
-def get_analysis_date():
-    """Get the analysis date from user input."""
-    while True:
-        date_str = typer.prompt(
-            "", default=datetime.datetime.now().strftime("%Y-%m-%d")
-        )
-        try:
-            # Validate date format and ensure it's not in the future
-            analysis_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            if analysis_date.date() > datetime.datetime.now().date():
-                console.print("[red]Error: Analysis date cannot be in the future[/red]")
-                continue
-            return date_str
-        except ValueError:
-            console.print(
-                "[red]Error: Invalid date format. Please use YYYY-MM-DD[/red]"
-            )
 
 
 def display_complete_report(final_state):
@@ -1103,6 +1071,136 @@ def run_analysis():
 @app.command()
 def analyze():
     run_analysis()
+
+
+@app.command()
+def portfolio_run(
+    iterations: int = typer.Option(1, "--iterations", "-n", help="Number of iterations to run"),
+    mode: str = typer.Option("once", "--mode", "-m", help="Run mode: 'once' or 'scheduled'")
+):
+    """
+    Run portfolio management iterations.
+    
+    Executes the autonomous portfolio management system to analyze positions,
+    make trading decisions, and execute trades based on profit-maximization strategy.
+    """
+    from portfoliomanager.manager import PortfolioManager  # type: ignore
+    from portfoliomanager.config import PORTFOLIO_CONFIG
+    from portfoliomanager.utils.scheduler import TradingScheduler  # type: ignore
+    from typing import cast
+  
+    pm = PortfolioManager(PORTFOLIO_CONFIG)
+    scheduler = TradingScheduler(cast(list[str], PORTFOLIO_CONFIG['schedule_times']))
+    
+    if mode == "scheduled":
+        console.print("[green]Starting scheduled mode...[/green]")
+        scheduler.run_scheduled(pm)
+    else:
+        console.print(f"[green]Running {iterations} iteration(s)...[/green]\n")
+        for i in range(iterations):
+            if iterations > 1:
+                console.print(f"\n[bold]Iteration {i+1}/{iterations}[/bold]")
+            scheduler.run_once(pm)
+        console.print("\n[green]Complete![/green]")
+
+
+@app.command()
+def portfolio_status():
+    """
+    Show current portfolio status with holding periods and P&L.
+    
+    Displays account information, current positions with entry dates,
+    holding periods, profit/loss, and momentum indicators.
+    """
+    from tradingagents.dataflows.alpaca_trading import get_account, get_positions
+    from portfoliomanager.dataflows.s3_client import S3ReportManager
+    from portfoliomanager.dataflows.position_tracker import PositionTracker  # type: ignore
+    from portfoliomanager.config import PORTFOLIO_CONFIG
+    from rich.table import Table
+    from typing import cast
+    
+    console.print("\n[bold cyan]Portfolio Status[/bold cyan]\n")
+    
+    # Get account info
+    account = get_account()
+    console.print(f"[yellow]Account Value:[/yellow] ${account.get('portfolio_value', 0):,.2f}")
+    console.print(f"[yellow]Cash:[/yellow] ${account.get('cash', 0):,.2f}")
+    console.print(f"[yellow]Buying Power:[/yellow] ${account.get('buying_power', 0):,.2f}\n")
+    
+    # Get positions with metrics
+    s3_client = S3ReportManager(
+        cast(str, PORTFOLIO_CONFIG['s3_bucket_name']),
+        cast(str, PORTFOLIO_CONFIG['s3_region'])
+    )
+    position_tracker = PositionTracker(s3_client)
+    positions = get_positions()
+    enhanced_positions = position_tracker.calculate_metrics(positions)
+    
+    if not enhanced_positions:
+        console.print("[yellow]No open positions[/yellow]")
+        return
+    
+    # Create table
+    table = Table(title="Current Positions")
+    table.add_column("Ticker", style="cyan", no_wrap=True)
+    table.add_column("Qty", justify="right")
+    table.add_column("Entry", justify="right")
+    table.add_column("Current", justify="right")
+    table.add_column("P&L %", justify="right")
+    table.add_column("P&L $", justify="right")
+    table.add_column("Days Held", justify="right")
+    table.add_column("7d Mom", justify="right")
+    table.add_column("30d Mom", justify="right")
+    
+    for pos in enhanced_positions:
+        pl_color = "green" if pos['unrealized_pl_pct'] >= 0 else "red"
+        mom_7d_color = "green" if pos['momentum_7d'] >= 0 else "red"
+        mom_30d_color = "green" if pos['momentum_30d'] >= 0 else "red"
+        
+        table.add_row(
+            pos['ticker'],
+            str(pos['qty']),
+            f"${pos['entry_price']:.2f}",
+            f"${pos['current_price']:.2f}",
+            f"[{pl_color}]{pos['unrealized_pl_pct']:.2f}%[/{pl_color}]",
+            f"[{pl_color}]${pos['unrealized_pl']:.2f}[/{pl_color}]",
+            str(pos['holding_days']),
+            f"[{mom_7d_color}]{pos['momentum_7d']:.1f}%[/{mom_7d_color}]",
+            f"[{mom_30d_color}]{pos['momentum_30d']:.1f}%[/{mom_30d_color}]",
+        )
+    
+    console.print(table)
+
+
+@app.command()
+def portfolio_history(
+    limit: int = typer.Option(10, "--limit", "-l", help="Number of recent iterations to show")
+):
+    """
+    View portfolio management history from S3.
+    
+    Shows summaries of recent portfolio management iterations
+    including trades executed and strategy decisions.
+    """
+    from portfoliomanager.dataflows.s3_client import S3ReportManager
+    from portfoliomanager.config import PORTFOLIO_CONFIG
+    from typing import cast
+    
+    console.print("\n[bold cyan]Portfolio Management History[/bold cyan]\n")
+    
+    s3_client = S3ReportManager(
+        cast(str, PORTFOLIO_CONFIG['s3_bucket_name']),
+        cast(str, PORTFOLIO_CONFIG['s3_region'])
+    )
+    
+    # Get last summary
+    summary = s3_client.get_last_summary()
+    
+    if summary:
+        console.print("[yellow]Last Iteration Summary:[/yellow]")
+        console.print(Panel(summary, border_style="blue"))
+    else:
+        console.print("[yellow]No iteration history found[/yellow]")
 
 
 if __name__ == "__main__":

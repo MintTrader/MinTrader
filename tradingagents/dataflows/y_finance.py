@@ -3,7 +3,49 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import yfinance as yf
 import os
+import warnings
+import urllib3
 from .stockstats_utils import StockstatsUtils
+
+# Disable SSL warnings and verification for yfinance
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Configure yfinance to disable SSL verification for curl_cffi
+# yfinance uses curl_cffi which requires special handling
+import os
+# Set environment variable to disable SSL verification for curl
+os.environ['CURL_CA_BUNDLE'] = ''  # Disable certificate verification
+os.environ['REQUESTS_CA_BUNDLE'] = ''  # Also for requests
+os.environ['SSL_CERT_FILE'] = ''  # And for SSL
+
+# Try to configure curl_cffi if available
+try:
+    from curl_cffi import requests as cf_requests
+    # Create a patched version that disables SSL
+    original_request = cf_requests.Session.request
+    
+    def patched_request(self, *args, **kwargs):
+        kwargs['verify'] = False
+        return original_request(self, *args, **kwargs)
+    
+    cf_requests.Session.request = patched_request
+except ImportError:
+    pass  # curl_cffi not available, skip
+
+# Also try to patch yfinance's session creation
+try:
+    import yfinance.data
+    original_build_session = yfinance.data._data._build_session
+    
+    def patched_build_session(self, *args, **kwargs):
+        session = original_build_session(self, *args, **kwargs)
+        session.verify = False
+        return session
+    
+    yfinance.data._data._build_session = patched_build_session
+except AttributeError:
+    pass  # Method doesn't exist or structure changed
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],

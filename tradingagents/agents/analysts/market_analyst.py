@@ -57,7 +57,10 @@ Volume-Based Indicators:
                     " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
                     " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
                     " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. The company we want to look at is {ticker}",
+                    "\n\n**IMPORTANT DATA RESTRICTION**: When requesting market data, be aware that Alpaca (the primary data source) cannot provide"
+                    " data from the last 15 minutes. If the current date ({current_date}) is today, use yesterday's date or an earlier date"
+                    " when calling tools to ensure data availability. This applies to both end_date in get_stock_data and curr_date in get_indicators."
+                    "\n\nFor your reference, the current date is {current_date}. The company we want to look at is {ticker}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]

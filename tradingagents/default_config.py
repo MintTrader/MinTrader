@@ -20,14 +20,18 @@ DEFAULT_CONFIG = {
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: yfinance, alpha_vantage, local
-        "technical_indicators": "yfinance",  # Options: yfinance, alpha_vantage, local
-        "fundamental_data": "alpha_vantage", # Options: openai, alpha_vantage, local
-        "news_data": "alpha_vantage",        # Options: openai, alpha_vantage, google, local
+        "core_stock_apis": "alpaca",         # Options: alpaca, yfinance, local
+        "technical_indicators": "alpaca",    # Options: alpaca, yfinance, local
+        "fundamental_data": "yfinance",      # Options: yfinance, openai, local
+        "news_data": "alpaca,google",        # Options: alpaca, google, openai, local (comma-separated for hybrid)
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
-        # Example: "get_news": "openai",               # Override category default
+        # Example: "get_stock_data": "alpaca",  # Override category default
+        # Example: "get_news": "openai",        # Override category default
     },
+    # Alpaca configuration
+    "alpaca_paper_mode": True,  # Always use paper trading by default for safety
+    # SSL/TLS configuration
+    "requests_verify_ssl": False,  # Disable SSL verification globally
 }

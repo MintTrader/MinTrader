@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import time
 import random
+import urllib3
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -11,6 +12,9 @@ from tenacity import (
     retry_if_exception_type,
     retry_if_result,
 )
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def is_rate_limited(response):
@@ -20,14 +24,15 @@ def is_rate_limited(response):
 
 @retry(
     retry=(retry_if_result(is_rate_limited)),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3),  # Reduced from 5 to 3
 )
 def make_request(url, headers):
     """Make a request with retry logic for rate limiting"""
-    # Random delay before each request to avoid detection
-    time.sleep(random.uniform(2, 6))
-    response = requests.get(url, headers=headers)
+    # Reduced delay for faster testing (was 2-6 seconds)
+    time.sleep(random.uniform(1, 2))
+    # Disable SSL verification and add timeout
+    response = requests.get(url, headers=headers, verify=False, timeout=10)
     return response
 
 
@@ -55,7 +60,8 @@ def getNewsData(query, start_date, end_date):
 
     news_results = []
     page = 0
-    while True:
+    max_pages = 3  # Limit to 3 pages (30 results) to avoid long waits
+    while page < max_pages:
         offset = page * 10
         url = (
             f"https://www.google.com/search?q={query}"

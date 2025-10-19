@@ -1,35 +1,74 @@
-[project]
+[tool.poetry]
 name = "tradingagents"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-Agents LLM Financial Trading Framework"
+authors = ["TradingAgents Team <yijia.xiao@cs.ucla.edu>"]
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "akshare>=1.16.98",
-    "backtrader>=1.9.78.123",
-    "chainlit>=2.5.5",
-    "chromadb>=1.0.12",
-    "eodhd>=1.0.32",
-    "feedparser>=6.0.11",
-    "finnhub-python>=2.4.23",
-    "grip>=4.6.2",
-    "langchain-anthropic>=0.3.15",
-    "langchain-experimental>=0.3.4",
-    "langchain-google-genai>=2.1.5",
-    "langchain-openai>=0.3.23",
-    "langgraph>=0.4.8",
-    "pandas>=2.3.0",
-    "parsel>=1.10.0",
-    "praw>=7.8.1",
-    "pytz>=2025.2",
-    "questionary>=2.1.0",
-    "redis>=6.2.0",
-    "requests>=2.32.4",
-    "rich>=14.0.0",
-    "setuptools>=80.9.0",
-    "stockstats>=0.6.5",
-    "tqdm>=4.67.1",
-    "tushare>=1.4.21",
-    "typing-extensions>=4.14.0",
-    "yfinance>=0.2.63",
+homepage = "https://github.com/TauricResearch"
+repository = "https://github.com/TauricResearch/TradingAgents"
+license = "Apache-2.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
 ]
+packages = [
+    { include = "tradingagents" },
+    { include = "cli" },
+    { include = "portfoliomanager" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+akshare = "^1.16.98"
+alpaca-py = "^0.29.0"
+backtrader = "^1.9.78.123"
+chainlit = "^2.5.5"
+chromadb = "^1.0.12"
+eodhd = "^1.0.32"
+feedparser = "^6.0.11"
+finnhub-python = "^2.4.23"
+grip = "^4.6.2"
+langchain-anthropic = "^0.3.15"
+langchain-experimental = "^0.3.4"
+langchain-google-genai = "^2.1.5"
+langchain-openai = "^0.3.23"
+langgraph = ">=0.4.8"
+pandas = "^2.3.0"
+parsel = "^1.10.0"
+praw = "^7.8.1"
+python-dotenv = "^1.0.0"
+pytz = "^2025.2"
+questionary = "^2.1.0"
+redis = "^6.2.0"
+requests = "^2.32.4"
+rich = "^14.0.0"
+setuptools = "^80.9.0"
+stockstats = "^0.6.5"
+tqdm = "^4.67.1"
+tushare = "^1.4.21"
+typer = ">=0.9.0"
+typing-extensions = "^4.14.0"
+urllib3 = "^2.3.0"
+yfinance = "^0.2.63"
+markdown = "^3.9"
+boto3 = "^1.28.0"
+APScheduler = "^3.10.0"
+python-dateutil = "^2.8.0"
+
+[tool.poetry.group.dev.dependencies]
+# Add development dependencies here if needed
+
+[tool.poetry.scripts]
+tradingagents = "cli.main:main"
+portfoliomanager = "portfoliomanager.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,10 +1,14 @@
 from openai import OpenAI
+import httpx
 from .config import get_config
+
+# Create httpx client with SSL verification disabled for OpenAI
+_http_client = httpx.Client(verify=False)
 
 
 def get_stock_news_openai(query, start_date, end_date):
     config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
+    client = OpenAI(base_url=config["backend_url"], http_client=_http_client)
 
     response = client.responses.create(
         model=config["quick_think_llm"],
@@ -39,7 +43,7 @@ def get_stock_news_openai(query, start_date, end_date):
 
 def get_global_news_openai(curr_date, look_back_days=7, limit=5):
     config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
+    client = OpenAI(base_url=config["backend_url"], http_client=_http_client)
 
     response = client.responses.create(
         model=config["quick_think_llm"],
@@ -74,7 +78,7 @@ def get_global_news_openai(curr_date, look_back_days=7, limit=5):
 
 def get_fundamentals_openai(ticker, curr_date):
     config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
+    client = OpenAI(base_url=config["backend_url"], http_client=_http_client)
 
     response = client.responses.create(
         model=config["quick_think_llm"],
