@@ -332,6 +332,68 @@ class S3ReportManager:
             print(f"Error fetching analyzed stocks history from S3: {e}")
             return {}
     
+    def get_report_from_s3(self, ticker: str, report_type: str, date: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve a specific analysis report from S3.
+        
+        Args:
+            ticker: Stock ticker symbol
+            report_type: Type of report (e.g., 'final_trade_decision', 'investment_plan', 'market_report')
+            date: Optional specific date (YYYY-MM-DD). If None, gets the most recent report.
+            
+        Returns:
+            Report content as string, or None if not found
+        """
+        try:
+            # If no date specified, find the most recent date for this ticker
+            if date is None:
+                # List all date folders for this ticker
+                paginator = self.s3_client.get_paginator('list_objects_v2')
+                date_folders = []
+                
+                for page in paginator.paginate(
+                    Bucket=self.bucket_name,
+                    Prefix=f'reports/{ticker}/',
+                    Delimiter='/'
+                ):
+                    if 'CommonPrefixes' in page:
+                        for prefix in page['CommonPrefixes']:
+                            date_str = prefix['Prefix'].rstrip('/').split('/')[-1]
+                            try:
+                                # Validate date format
+                                datetime.strptime(date_str, "%Y-%m-%d")
+                                date_folders.append(date_str)
+                            except ValueError:
+                                continue
+                
+                if not date_folders:
+                    print(f"No analysis reports found for {ticker}")
+                    return None
+                
+                # Get the most recent date
+                date_folders.sort(reverse=True)
+                date = date_folders[0]
+            
+            # Fetch the report
+            s3_key = f"reports/{ticker}/{date}/{report_type}.md"
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=s3_key
+            )
+            content = response['Body'].read().decode('utf-8')
+            return content
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                print(f"Report '{report_type}' not found for {ticker} on {date}")
+                return None
+            print(f"Error retrieving report for {ticker}: {e}")
+            return None
+        except Exception as e:
+            print(f"Error retrieving report for {ticker}: {e}")
+            return None
+    
     def get_stock_analysis_decision(self, ticker: str, date: str) -> str:
         """
         Retrieve the trading decision for a specific stock analysis from S3.
@@ -350,20 +412,35 @@ class S3ReportManager:
                 Key=s3_key
             )
             content = response['Body'].read().decode('utf-8')
+            content_upper = content.upper()  # Case-insensitive matching
             
-            # Extract decision from content
-            if "**Decision: BUY**" in content or "Decision: BUY" in content:
+            # Extract decision from content - check multiple patterns
+            # Common patterns: "Recommendation: Buy", "Decision: BUY", "Final Recommendation: Hold"
+            if any(pattern in content_upper for pattern in [
+                "RECOMMENDATION: BUY", "RECOMMENDATION:**BUY**", "RECOMMENDATION: **BUY**",
+                "DECISION: BUY", "DECISION:**BUY**", "DECISION: **BUY**"
+            ]):
                 return "BUY"
-            elif "**Decision: SELL**" in content or "Decision: SELL" in content:
+            elif any(pattern in content_upper for pattern in [
+                "RECOMMENDATION: SELL", "RECOMMENDATION:**SELL**", "RECOMMENDATION: **SELL**",
+                "DECISION: SELL", "DECISION:**SELL**", "DECISION: **SELL**"
+            ]):
                 return "SELL"
-            elif "**Decision: HOLD**" in content or "Decision: HOLD" in content:
+            elif any(pattern in content_upper for pattern in [
+                "RECOMMENDATION: HOLD", "RECOMMENDATION:**HOLD**", "RECOMMENDATION: **HOLD**",
+                "DECISION: HOLD", "DECISION:**HOLD**", "DECISION: **HOLD**",
+                "FINAL RECOMMENDATION:**HOLD**", "FINAL RECOMMENDATION: **HOLD**"
+            ]):
                 return "HOLD"
             else:
+                # Log the beginning of content for debugging
+                print(f"Could not determine decision for {ticker} on {date}. Content preview: {content[:200]}...")
                 return "UNKNOWN"
                 
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
+                print(f"Decision file not found for {ticker} on {date}")
                 return "UNKNOWN"
             print(f"Error retrieving decision for {ticker} on {date}: {e}")
             return "UNKNOWN"

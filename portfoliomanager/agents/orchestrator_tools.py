@@ -268,6 +268,45 @@ def cancel_order(
 
 
 @tool
+def read_historical_report(
+    ticker: Annotated[str, "Stock ticker symbol"],
+    report_type: Annotated[str, "Type of report: 'final_trade_decision', 'investment_plan', 'market_report', 'fundamentals_report', 'news_report'"],
+    date: Annotated[str | None, "Optional specific date (YYYY-MM-DD). Leave empty for most recent."] = None
+) -> str:
+    """
+    Read a historical analysis report from S3 storage.
+    
+    This allows you to review past analysis without re-running expensive analyses.
+    Useful for:
+    - Checking previous analysis of current positions
+    - Reviewing recommendations from recent analyses
+    - Making informed decisions based on past research
+    
+    Available report types:
+    - 'final_trade_decision': Final recommendation (BUY/SELL/HOLD) with rationale
+    - 'investment_plan': Comprehensive investment strategy and analysis
+    - 'market_report': Technical analysis and market conditions
+    - 'fundamentals_report': Company fundamentals and financial analysis
+    - 'news_report': News sentiment and recent developments
+    - 'trader_investment_plan': Trader's detailed execution plan
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'AAPL', 'TSLA')
+        report_type: Which report to read
+        date: Optional specific date (YYYY-MM-DD). If not provided, fetches most recent.
+        
+    Returns:
+        The report content from S3
+        
+    Example:
+        read_historical_report('AAPL', 'final_trade_decision')  # Gets latest AAPL analysis
+        read_historical_report('TSLA', 'investment_plan', '2025-10-18')  # Specific date
+    """
+    # This will be intercepted by the manager to fetch from S3
+    return f"Reading historical {report_type} for {ticker} (date: {date or 'latest'})"
+
+
+@tool
 def review_and_decide() -> str:
     """
     Signal that you've reviewed all analysis and made your trading decisions.
