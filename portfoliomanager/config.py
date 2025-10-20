@@ -56,8 +56,9 @@ PORTFOLIO_CONFIG = {
     # - Iteration limits (deterministic workflow)
     
     # Analysis Config (passed to TradingAgentsGraph)
-    # Using only 2 analysts reduces LLM calls by 33% while maintaining quality
-    "analysis_analysts": ["market", "news"],  # Removed "fundamentals" for cost optimization
+    # Comprehensive analysis with all 4 analysts for complete coverage
+    # Includes: technical analysis, news, fundamentals, and sentiment
+    "analysis_analysts": ["market", "news", "fundamentals", "social"],
     "analysis_config": {
         **DEFAULT_CONFIG,
         # Use GPT-4o-mini for orchestrator (better instruction-following than nano)
