@@ -147,12 +147,7 @@ class OrchestratorPortfolioManager:
             self.logger.log_system("\n=== STEP 0: Retrieving Last Iteration Summary ===")
             last_summary = self.s3_client.get_last_summary()
             if last_summary:
-                self.logger.log_system("✅ Retrieved previous iteration summary from S3")
-                self.logger.log_system("Previous iteration summary:")
-                # Log ALL lines of the summary (no truncation)
-                for line in last_summary.split('\n'):
-                    if line.strip():
-                        self.logger.log_system(f"  {line}")
+                self.logger.log_system("🧠💭 Retrieved previous iteration summary from S3")
             else:
                 self.logger.log_system("ℹ️  No previous iteration summary found (first run)")
                 last_summary = "No previous iteration data available."
@@ -236,6 +231,18 @@ class OrchestratorPortfolioManager:
             
             # Generate and save iteration summary
             summary = self.generate_iteration_summary(updated_open_orders)
+            
+            # LOG THE SUMMARY - so user can see what agent is writing to itself for next iteration
+            self.logger.log_system("\n" + "=" * 80)
+            self.logger.log_system("📝 SUMMARY FOR NEXT ITERATION (Agent's Memory)")
+            self.logger.log_system("=" * 80)
+            self.logger.log_system("\nThis is what the agent will read when it wakes up next time:\n")
+            self.logger.log_system(summary)
+            self.logger.log_system("\n" + "=" * 80)
+            self.logger.log_system("END OF SUMMARY FOR NEXT ITERATION")
+            self.logger.log_system("=" * 80 + "\n")
+            
+            # Save to S3 for next iteration
             self.s3_client.save_summary(summary, self.iteration_id)
             
             self.logger.log_system("✅ Iteration complete. Check message_tool.log for details.")
@@ -427,9 +434,9 @@ class OrchestratorPortfolioManager:
             if order_tickers:
                 query_parts.append(f"Price movement and news on {', '.join(order_tickers)}")
         
-        # If we need new opportunities - BE EXPLICIT about wanting stock tickers
+        # If we need new opportunities - Focus on GROWTH POTENTIAL, not just best performers
         if not positions or len(positions) < 5:
-            query_parts.append("List specific stock tickers: top 5-10 performing stocks with positive momentum and strong fundamentals today")
+            query_parts.append("List specific stock tickers: 5-10 stocks with strong growth potential and catalysts - undervalued companies with improving fundamentals, upcoming catalysts, or emerging market opportunities (not just recent top performers)")
         
         # Combine into one query
         query = " | ".join(query_parts)
@@ -617,12 +624,17 @@ SELECTION STRATEGY - Balance these objectives:
      * 📉 SELL: Exit or take profits
    - Prioritize positions with large gains/losses
 
-2️⃣ NEW INVESTMENT OPPORTUNITIES:
+2️⃣ NEW INVESTMENT OPPORTUNITIES (FOCUS ON GROWTH POTENTIAL):
    - USE MARKET CONTEXT BELOW to find specific stock tickers mentioned
-   - Look for stocks with positive momentum + strong fundamentals
+   - Look for stocks with REAL GROWTH POTENTIAL, not just recent performance:
+     * Companies with improving fundamentals (revenue growth, margin expansion)
+     * Stocks with upcoming catalysts (new products, market expansion, regulatory approval)
+     * Undervalued companies with strong business models
+     * NOT just "best performers" or momentum stocks
    - The market context may list specific tickers - EXTRACT THEM
    - Consider diversification (avoid sector over-concentration)
    - Pay special attention to the end of market context (contains stock recommendations)
+   - THINK LONG-TERM VALUE, not short-term price movements
 
 SUGGESTED APPROACH:
 • If 3+ positions NEED ANALYSIS → Select 2-3 of them (portfolio health first)

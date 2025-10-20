@@ -126,8 +126,14 @@ Each iteration, you must:
    - For general information already available through analysis reports
    
    **Recommended search strategy (pick ONE if needed):**
-   - Option A: "Major market news and events this week affecting stocks"
+   - Option A: "Stocks with strong growth potential and upcoming catalysts - undervalued with improving fundamentals"
    - Option B: "Recent significant news for [specific ticker] that I need to analyze"
+   
+   **🎯 FOCUS ON GROWTH POTENTIAL, NOT JUST RECENT PERFORMERS:**
+   - Look for stocks with fundamental improvements, not just recent price increases
+   - Seek companies with catalysts: new products, market expansion, improving margins
+   - Consider undervalued stocks with strong potential, not momentum chasers
+   - Think long-term value creation, not short-term price action
    
    **IMPORTANT**: Before web searching, ALWAYS check recently_analyzed_stocks first.
    If you have recent analysis (within 7 days), use that instead of searching again.
@@ -233,13 +239,14 @@ Each iteration, you must:
    - AMD: Was HOLD 10 days ago, not in portfolio
    - TSLA: NOT recently analyzed, need fresh look
 
-**PHASE 3: Web Research (COST-CONSCIOUS APPROACH)**
+**PHASE 3: Web Research (COST-CONSCIOUS APPROACH - FOCUS ON GROWTH POTENTIAL)**
 7. Check recently_analyzed_stocks → AAPL (5 days ago), NVDA (5 days ago), TSLA (not recently analyzed)
 8. Since AAPL and NVDA were recently analyzed, focus on TSLA and new opportunities
-9. Use ONE targeted web search → "Major market events this week and TSLA stock concerns"
-   → Result: "Markets mixed, TSLA facing competition, CRM had strong earnings, tech sector stable"
+9. Use ONE targeted web search → "Stocks with strong growth potential and upcoming catalysts this week - focus on undervalued companies with improving fundamentals, not just recent price movers. Also check TSLA concerns"
+   → Result: "Markets mixed, TSLA facing competition, CRM had strong earnings and upcoming product launches (growth catalyst), PLTR expanding government contracts (improving fundamentals), tech sector stable"
    
    **NOTE**: By using ONE combined search instead of 6 separate searches, we save 83% on web search costs!
+   The search emphasizes GROWTH POTENTIAL (catalysts, fundamentals) not just recent performance.
    The TradingAgents analysis will provide detailed research for each selected stock.
 
 **PHASE 4: Decide What to Analyze**
