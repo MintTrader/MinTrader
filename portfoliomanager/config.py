@@ -14,16 +14,16 @@ PORTFOLIO_CONFIG = {
     
     # Trading Strategy
     "strategy_objective": "maximize_profits",
-    "trading_style": "medium_term",  # weeks to months
-    "min_conviction_score": 7,        # Only execute high-conviction trades
-    "min_holding_days": 7,            # Discourage selling too quickly
+    "trading_style": "medium_term",  # weeks to months, hold winners
+    "min_conviction_score": 7,        # Only execute high-conviction trades (quality > quantity)
+    "min_holding_days": 7,            # Don't panic sell - give positions time to work
     
     # Trading Constraints
-    "max_position_size_pct": 10,      # Max 10% per position
+    "max_position_size_pct": 10,      # Max 10% per position (can go to 15% for high conviction)
     "max_portfolio_concentration": 30, # Max 30% in any sector
     "max_trades_per_day": 10,
     "min_cash_reserve_pct": 5,        # Keep 5% cash
-    "stop_loss_pct": 5,               # Auto stop-loss at -5%
+    "stop_loss_pct": 15,              # Stop-loss at -15% (strategic threshold, not panic selling)
     
     # Watchlist
     "watchlist": ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA"],

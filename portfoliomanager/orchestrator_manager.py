@@ -148,13 +148,11 @@ class OrchestratorPortfolioManager:
             last_summary = self.s3_client.get_last_summary()
             if last_summary:
                 self.logger.log_system("✅ Retrieved previous iteration summary from S3")
-                self.logger.log_system("Previous iteration highlights:")
-                # Log key parts of the summary
-                for line in last_summary.split('\n')[:15]:  # Show first 15 lines
+                self.logger.log_system("Previous iteration summary:")
+                # Log ALL lines of the summary (no truncation)
+                for line in last_summary.split('\n'):
                     if line.strip():
                         self.logger.log_system(f"  {line}")
-                if len(last_summary.split('\n')) > 15:
-                    self.logger.log_system("  ... (see full summary in S3)")
             else:
                 self.logger.log_system("ℹ️  No previous iteration summary found (first run)")
                 last_summary = "No previous iteration data available."
@@ -733,17 +731,40 @@ Examples:
         # Build prompt for LLM
         prompt_parts = []
         
-        prompt_parts.append("=== TRADING DECISION PHASE ===\n")
-        prompt_parts.append("You've completed stock analysis. Now review the results and make trading decisions.\n")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("🤖 YOU ARE THE AUTONOMOUS PORTFOLIO MANAGER 🤖")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("")
+        prompt_parts.append("You manage this entire portfolio. The analyzed stocks are RESEARCH to help you,")
+        prompt_parts.append("but YOU make ALL trading decisions based on:")
+        prompt_parts.append("  • Your analysis research (if available)")
+        prompt_parts.append("  • Current portfolio state (positions, P&L, cash)")
+        prompt_parts.append("  • Market conditions and opportunities")
+        prompt_parts.append("  • Your judgment as a portfolio manager")
+        prompt_parts.append("")
+        prompt_parts.append("YOU CAN:")
+        prompt_parts.append("  ✅ BUY new stocks (if you have cash)")
+        prompt_parts.append("  ✅ SELL existing positions (for any valid reason)")
+        prompt_parts.append("  ✅ ADD to existing positions (buy more)")
+        prompt_parts.append("  ✅ REDUCE existing positions (sell some)")
+        prompt_parts.append("  ✅ CANCEL pending orders (if no longer needed)")
+        prompt_parts.append("  ✅ MODIFY pending orders (change price/quantity if not filled)")
+        prompt_parts.append("  ✅ Make decisions on stocks NOT analyzed (based on portfolio state)")
+        prompt_parts.append("  ✅ Do NOTHING if the portfolio is well-positioned")
+        prompt_parts.append("")
+        prompt_parts.append("The analysis is a TOOL, not a constraint. You're in charge!")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("")
         
         # Summarize what was analyzed
         if self.analyzed_stocks:
-            prompt_parts.append(f"\n📊 STOCKS ANALYZED THIS ITERATION:")
+            prompt_parts.append(f"📊 RESEARCH COMPLETED THIS ITERATION:")
             for ticker, info in self.analyzed_stocks.items():
-                prompt_parts.append(f"  - {ticker}: Analysis complete")
-            prompt_parts.append(f"\nUse read_analysis_report(ticker, 'final_trade_decision') to review each analysis.")
+                prompt_parts.append(f"  - {ticker}: Analysis complete (decision: {info.get('decision', 'UNKNOWN')})")
+            prompt_parts.append(f"\n💡 Use read_analysis_report(ticker, 'final_trade_decision') to review each analysis.")
+            prompt_parts.append("   This research can inform your decisions, but you're not limited to trading only these stocks!")
         else:
-            prompt_parts.append("\nNo new stocks analyzed this iteration.")
+            prompt_parts.append("ℹ️  No new analysis this iteration - make decisions based on portfolio state.")
         
         # Portfolio state
         cash = float(account.get('cash', 0))
@@ -782,19 +803,32 @@ Examples:
         prompt_parts.append(f"\nMarket Status: {'OPEN' if market_open else 'CLOSED (orders will queue)'}")
         
         # Instructions
-        prompt_parts.append("\n" + "="*60)
-        prompt_parts.append("YOUR TASK:")
-        prompt_parts.append("="*60)
-        prompt_parts.append("1. Review analysis reports:")
-        prompt_parts.append("   - read_analysis_report(ticker, report_type) for stocks analyzed THIS iteration")
-        prompt_parts.append("   - read_historical_report(ticker, report_type) for past analyses from S3")
-        prompt_parts.append("   💡 Use historical reports to review positions without re-analyzing!")
-        prompt_parts.append("2. Consider TradingAgents recommendations AND current portfolio state")
-        prompt_parts.append("3. Make trading decisions using these tools:")
-        prompt_parts.append("   - place_buy_order(ticker, order_value, reasoning)")
-        prompt_parts.append("   - place_sell_order(ticker, quantity, reasoning)")
-        prompt_parts.append("   - cancel_order(ticker, reasoning) - for pending orders")
-        prompt_parts.append("4. When done, call review_and_decide() to complete")
+        prompt_parts.append("\n" + "="*80)
+        prompt_parts.append("YOUR DECISION PROCESS:")
+        prompt_parts.append("="*80)
+        prompt_parts.append("")
+        prompt_parts.append("STEP 1: Review available information")
+        prompt_parts.append("  • read_analysis_report(ticker, report_type) - for newly analyzed stocks")
+        prompt_parts.append("  • read_historical_report(ticker, report_type) - for past analyses from S3")
+        prompt_parts.append("  • get_current_positions() - see all holdings and P&L")
+        prompt_parts.append("  • get_open_orders() - check pending orders")
+        prompt_parts.append("")
+        prompt_parts.append("STEP 2: Assess your portfolio")
+        prompt_parts.append("  • Which positions are performing well/poorly?")
+        prompt_parts.append("  • Do you have available cash to invest?")
+        prompt_parts.append("  • Are there positions you should exit or reduce?")
+        prompt_parts.append("  • Should you add to winning positions?")
+        prompt_parts.append("")
+        prompt_parts.append("STEP 3: Make trading decisions using these tools:")
+        prompt_parts.append("  • place_buy_order(ticker, order_value, reasoning) - Buy new or add to positions")
+        prompt_parts.append("  • place_sell_order(ticker, quantity, reasoning) - Exit or reduce positions")
+        prompt_parts.append("  • cancel_order(ticker, reasoning) - Cancel pending orders that are no longer needed")
+        prompt_parts.append("  • modify_order(order_id, new_limit_price=X, new_qty=Y, reasoning) - Edit pending orders")
+        prompt_parts.append("    💡 Check get_open_orders() to see order IDs and current status")
+        prompt_parts.append("")
+        prompt_parts.append("STEP 4: When done, call review_and_decide() to complete")
+        prompt_parts.append("")
+        prompt_parts.append("REMEMBER: You're managing the entire portfolio, not just the analyzed stocks!")
         
         prompt_parts.append("\nIMPORTANT RULES:")
         prompt_parts.append("=" * 60)
@@ -805,16 +839,69 @@ Examples:
         prompt_parts.append("- NEVER go negative or into margin")
         prompt_parts.append("- If insufficient cash, you MUST sell positions first to raise cash")
         prompt_parts.append("")
-        prompt_parts.append("TRADING GUIDELINES:")
-        prompt_parts.append("- You can trade based on analysis AND/OR portfolio state")
-        prompt_parts.append("- 📈 ADDING TO POSITIONS: You CAN buy more of stocks you already own!")
-        prompt_parts.append("  * If analysis is bullish and position is small → Consider increasing position size")
-        prompt_parts.append("  * If stock has strong fundamentals → Add to winners (don't just hold)")
-        prompt_parts.append("  * Average down on quality stocks if price dipped but fundamentals strong")
-        prompt_parts.append("- Check for pending orders to avoid duplicates")
-        prompt_parts.append("- Consider diversification and risk management")
-        prompt_parts.append("- Provide clear reasoning for each trade")
-        prompt_parts.append("- It's OK to make 0 trades if nothing is actionable")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("TRADING GUIDELINES - YOU HAVE FULL AUTONOMY:")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("")
+        prompt_parts.append("🔥 YOU ARE NOT LIMITED TO ANALYZED STOCKS:")
+        prompt_parts.append("  • Analysis is research, not a requirement")
+        prompt_parts.append("  • You can trade ANY position in your portfolio")
+        prompt_parts.append("  • You can buy stocks even if not analyzed (if you have good reason)")
+        prompt_parts.append("  • You can sell stocks even if not analyzed (if you have good reason)")
+        prompt_parts.append("")
+        prompt_parts.append("📈 STRATEGIC PORTFOLIO ACTIONS:")
+        prompt_parts.append("")
+        prompt_parts.append("BUY/ADD DECISIONS (based on conviction, not hype):")
+        prompt_parts.append("  • BUY NEW STOCKS: When analysis shows strong fundamentals + good entry point")
+        prompt_parts.append("  • ADD TO WINNERS: When fundamentals remain strong and position size allows")
+        prompt_parts.append("  • AVERAGE DOWN: Only for quality stocks with intact fundamentals (not falling knives!)")
+        prompt_parts.append("")
+        prompt_parts.append("SELL/TRIM DECISIONS (strategic, not emotional):")
+        prompt_parts.append("  • REBALANCE: When one position exceeds target allocation (e.g., >10-15% of portfolio)")
+        prompt_parts.append("  • EXIT ON FUNDAMENTALS: When analysis shows deteriorating business/competitive position")
+        prompt_parts.append("  • STOP-LOSS: When position hits meaningful loss threshold (e.g., -15% to -20%)")
+        prompt_parts.append("  • BETTER OPPORTUNITY: Sell weaker position to fund stronger opportunity")
+        prompt_parts.append("  • NOT: 'Stock down 10%' or 'Market red today' - these are poor reasons!")
+        prompt_parts.append("")
+        prompt_parts.append("ORDER MANAGEMENT:")
+        prompt_parts.append("  • MODIFY ORDERS: Adjust price if stock moved but thesis still valid")
+        prompt_parts.append("  • CANCEL ORDERS: When original thesis no longer holds or strategy changed")
+        prompt_parts.append("")
+        prompt_parts.append("💡 STRATEGIC DECISION FRAMEWORK:")
+        prompt_parts.append("  • Base decisions on FUNDAMENTALS first (analysis, business strength, competitive position)")
+        prompt_parts.append("  • Use P&L as a SIGNAL, not a trigger:")
+        prompt_parts.append("    - Large loss → Re-evaluate fundamentals, not automatic sell")
+        prompt_parts.append("    - Large gain → Check if over-concentrated, not automatic profit-taking")
+        prompt_parts.append("  • Portfolio allocation matters: Rebalance when positions exceed 10-15%")
+        prompt_parts.append("  • Market volatility is NORMAL - don't react emotionally")
+        prompt_parts.append("  • Check pending orders to avoid duplicates")
+        prompt_parts.append("  • Provide clear, strategic reasoning for each trade")
+        prompt_parts.append("  • PATIENCE IS A STRATEGY: It's OK to make 0 trades if nothing is actionable")
+        prompt_parts.append("")
+        prompt_parts.append("")
+        prompt_parts.append("🎯 SMART INVESTING PRINCIPLES:")
+        prompt_parts.append("  • DON'T panic sell just because a stock is down - markets fluctuate!")
+        prompt_parts.append("  • DON'T chase arbitrary profit targets - sell strategically")
+        prompt_parts.append("  • DO hold positions you believe in through normal volatility")
+        prompt_parts.append("  • DO sell when fundamentals deteriorate or strategy changes")
+        prompt_parts.append("  • DO buy based on conviction from thorough analysis")
+        prompt_parts.append("  • DO rebalance when portfolio gets over-concentrated")
+        prompt_parts.append("")
+        prompt_parts.append("EXAMPLES OF SMART DECISIONS:")
+        prompt_parts.append("  ✅ 'Analysis shows GOOGL fundamentals are strong - I'll add to this winning position'")
+        prompt_parts.append("  ✅ 'ABT is 30% of portfolio (over-concentrated) - I'll trim and diversify'")
+        prompt_parts.append("  ✅ 'Portfolio has $80k cash and analysis shows MSFT has strong fundamentals - I'll invest'")
+        prompt_parts.append("  ✅ 'AMD down 15% but analysis shows fundamentals deteriorated - now I'll exit strategically'")
+        prompt_parts.append("  ✅ 'TSLA hit my -20% stop-loss threshold - I'll sell to limit losses'")
+        prompt_parts.append("  ✅ 'NVDA order at $500 not filling, stock at $510 with strong momentum - I'll modify to $510'")
+        prompt_parts.append("  ✅ 'Pending AAPL order no longer aligns with strategy - I'll cancel it'")
+        prompt_parts.append("  ✅ 'Positions performing well, no fundamental changes - I'll hold through volatility'")
+        prompt_parts.append("")
+        prompt_parts.append("❌ BAD DECISIONS (avoid these):")
+        prompt_parts.append("  ❌ 'Stock down 5% today - I'll panic sell' (emotional, not strategic)")
+        prompt_parts.append("  ❌ 'Stock up 10% - I'll take profits' (arbitrary, no real reason)")
+        prompt_parts.append("  ❌ 'Market is red today - I'll sell everything' (panic, not investing)")
+        prompt_parts.append("  ❌ 'I'll buy this stock with no analysis' (no conviction/research)")
         
         prompt = "\n".join(prompt_parts)
         
@@ -832,7 +919,11 @@ Examples:
                 # Response is the message itself
                 messages.append(response)
                 
-                self.logger.log_system(f"\n[Iteration {iteration + 1}] LLM: {response.content[:200] if response.content else ''}...")
+                # Log FULL LLM response (no truncation)
+                if response.content:
+                    self.logger.log_system(f"\n[Iteration {iteration + 1}] LLM: {response.content}")
+                else:
+                    self.logger.log_system(f"\n[Iteration {iteration + 1}] LLM: (no text content)")
                 
                 # Check if LLM wants to use tools
                 if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -1094,6 +1185,97 @@ Examples:
                 self.logger.log_system(f"   ❌ Error cancelling order: {e}")
                 return f"❌ Error cancelling order for {ticker}: {str(e)}"
         
+        elif tool_name == 'get_current_positions':
+            # Refresh positions and return formatted info
+            from tradingagents.dataflows.alpaca_trading import get_positions as get_alpaca_positions
+            fresh_positions = get_alpaca_positions()
+            
+            if not fresh_positions:
+                return "No current positions. Portfolio is 100% cash."
+            
+            result_lines = [f"📈 CURRENT POSITIONS ({len(fresh_positions)}):"]
+            for p in fresh_positions:
+                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
+                result_lines.append(
+                    f"  • {p['symbol']}: {p['qty']} shares | "
+                    f"Value: ${p.get('market_value', 0):,.2f} | "
+                    f"P&L: {pnl_pct:+.1f}% | "
+                    f"Avg Cost: ${p.get('avg_entry_price', 0):.2f}"
+                )
+            
+            return "\n".join(result_lines)
+        
+        elif tool_name == 'get_open_orders':
+            # Refresh orders and return formatted info
+            from tradingagents.dataflows.alpaca_trading import get_open_orders as get_alpaca_open_orders
+            fresh_orders = get_alpaca_open_orders()
+            
+            if not fresh_orders:
+                return "✅ No pending orders. All previous orders filled or cancelled."
+            
+            result_lines = [f"📋 PENDING ORDERS ({len(fresh_orders)}):"]
+            for o in fresh_orders:
+                order_id = str(o.get('id', 'N/A'))[:8]
+                result_lines.append(
+                    f"  • {o.get('symbol')}: {o.get('side').upper()} {o.get('qty')} shares | "
+                    f"Price: ${o.get('limit_price', 'market')} | "
+                    f"Status: {o.get('status', 'unknown')} | "
+                    f"ID: {order_id}"
+                )
+            
+            return "\n".join(result_lines)
+        
+        elif tool_name == 'modify_order':
+            # Modify/edit a pending order
+            order_id = tool_args.get('order_id', '')
+            new_limit_price = tool_args.get('new_limit_price')
+            new_qty = tool_args.get('new_qty')
+            reasoning = str(tool_args.get('reasoning', ''))
+            
+            if not order_id:
+                return "❌ order_id is required. Use get_open_orders() to see order IDs."
+            
+            # Find the order
+            order = next((o for o in open_orders if str(o.get('id', ''))[:8] == str(order_id)[:8]), None)
+            if not order:
+                return f"❌ Order {order_id} not found. Use get_open_orders() to see current orders."
+            
+            self.logger.log_system(f"✏️  MODIFY ORDER: {order_id}")
+            self.logger.log_system(f"   Original: {order.get('side')} {order.get('qty')} {order.get('symbol')} @ ${order.get('limit_price', 'market')}")
+            if new_limit_price:
+                self.logger.log_system(f"   New price: ${new_limit_price}")
+            if new_qty:
+                self.logger.log_system(f"   New quantity: {new_qty}")
+            self.logger.log_system(f"   Reasoning: {reasoning}")
+            
+            # Execute modification
+            try:
+                from .agents.utils.portfolio_management_tools import modify_order as modify_order_pm
+                
+                # Build modification parameters
+                mod_params = {'order_id': str(order.get('id'))}
+                if new_limit_price is not None:
+                    mod_params['limit_price'] = float(new_limit_price)
+                if new_qty is not None:
+                    mod_params['qty'] = int(new_qty)
+                
+                result = modify_order_pm.invoke(mod_params)
+                
+                self.logger.log_system(f"   ✅ Order modified successfully")
+                
+                return (
+                    f"✅ Order {order_id} modified!\n"
+                    f"   • Symbol: {order.get('symbol')}\n"
+                    f"   • Side: {order.get('side')}\n"
+                    + (f"   • New Price: ${new_limit_price}\n" if new_limit_price else "")
+                    + (f"   • New Quantity: {new_qty}\n" if new_qty else "")
+                    + f"   • Reason: {reasoning}"
+                )
+                
+            except Exception as e:
+                self.logger.log_system(f"   ❌ Error modifying order: {e}")
+                return f"❌ Error modifying order {order_id}: {str(e)}"
+        
         elif tool_name == 'review_and_decide':
             self.logger.log_system("✅ LLM signaled completion of trading decisions")
             return "Trading decision phase complete."
@@ -1289,16 +1471,16 @@ Examples:
     
     def generate_iteration_summary(self, open_orders=None) -> str:
         """
-        Generate summary for next iteration.
+        Generate summary for next iteration focused on actionable information.
         
-        This summary is saved to S3 and retrieved by the next iteration to maintain
-        context about portfolio state, pending orders, and recent decisions.
+        This summary is saved to S3 and retrieved by the next iteration to help
+        the agent understand what happened and what needs to be checked/done next.
         
         Args:
             open_orders: Current open orders to include in summary
             
         Returns:
-            Summary string
+            Summary string optimized for agent context
         """
         account = get_account()
         positions = get_positions()
@@ -1306,113 +1488,193 @@ Examples:
         summary_lines = [
             f"ITERATION: {self.iteration_id}",
             f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"\n{'='*60}",
-            f"PORTFOLIO STATE:",
-            f"{'='*60}",
-            f"- Total Value: ${account.get('portfolio_value', 0):,.2f}",
-            f"- Cash: ${account.get('cash', 0):,.2f}",
-            f"- Buying Power: ${account.get('buying_power', 0):,.2f}",
-            f"- Positions: {len(positions)}",
+            f"",
+            f"=" * 80,
+            f"WHAT HAPPENED IN THIS ITERATION:",
+            f"=" * 80,
+            f"",
         ]
         
-        # Add position details
-        if positions:
-            summary_lines.append(f"\nCurrent Positions:")
-            for p in positions[:10]:  # List up to 10 positions
-                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
-                summary_lines.append(
-                    f"  - {p['symbol']}: {p['qty']} shares, "
-                    f"${p.get('market_value', 0):,.2f} ({pnl_pct:+.1f}%)"
-                )
-            if len(positions) > 10:
-                summary_lines.append(f"  ... and {len(positions) - 10} more")
+        # What did we research?
+        if self.analyzed_stocks:
+            summary_lines.append("📊 RESEARCH COMPLETED:")
+            for ticker, info in self.analyzed_stocks.items():
+                summary_lines.append(f"  • {ticker}: {info.get('decision', 'UNKNOWN')} (analyzed on {info.get('date', 'unknown date')})")
+            summary_lines.append("")
+        else:
+            summary_lines.append("📊 No new research this iteration")
+            summary_lines.append("")
         
-        # Add pending orders (IMPORTANT for next iteration)
+        # What trades did we make?
+        if self.trades_executed:
+            summary_lines.append(f"💼 TRADES EXECUTED ({len(self.trades_executed)}):")
+            for trade in self.trades_executed:
+                if trade['action'] == 'BUY':
+                    summary_lines.append(
+                        f"  • BUY {trade['ticker']}: {trade.get('quantity', 0)} shares @ ${trade.get('price', 0):.2f} "
+                        f"(Total: ${trade.get('value', 0):,.2f})"
+                    )
+                elif trade['action'] == 'SELL':
+                    summary_lines.append(
+                        f"  • SELL {trade['ticker']}: {trade.get('quantity', 0)} shares @ ${trade.get('price', 0):.2f} "
+                        f"(Total: ${trade.get('value', 0):,.2f})"
+                    )
+                summary_lines.append(f"    Reason: {trade.get('reasoning', 'N/A')}")
+            summary_lines.append("")
+        else:
+            summary_lines.append("💼 No trades executed this iteration")
+            summary_lines.append("")
+        
+        # Current portfolio state
+        summary_lines.extend([
+            f"=" * 80,
+            f"CURRENT PORTFOLIO STATE:",
+            f"=" * 80,
+            f"",
+            f"💰 ACCOUNT:",
+            f"  • Total Value: ${account.get('portfolio_value', 0):,.2f}",
+            f"  • Cash Available: ${account.get('cash', 0):,.2f} ⚠️ Use this for buying",
+            f"  • Buying Power: ${account.get('buying_power', 0):,.2f} (DO NOT USE - margin)",
+            f"",
+        ])
+        
+        # Add position details with actionable insights
+        if positions:
+            summary_lines.append(f"📈 POSITIONS ({len(positions)}):")
+            for p in positions[:15]:  # Show more positions for better context
+                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
+                market_value = p.get('market_value', 0)
+                
+                # Add performance indicators
+                if pnl_pct > 10:
+                    indicator = "🟢 Strong performer"
+                elif pnl_pct > 5:
+                    indicator = "🟢 Good"
+                elif pnl_pct > -5:
+                    indicator = "⚪ Neutral"
+                elif pnl_pct > -10:
+                    indicator = "🟡 Underperforming"
+                else:
+                    indicator = "🔴 Significant loss"
+                
+                summary_lines.append(
+                    f"  • {p['symbol']}: {p['qty']} shares | ${market_value:,.2f} | "
+                    f"P&L: {pnl_pct:+.1f}% | {indicator}"
+                )
+            if len(positions) > 15:
+                summary_lines.append(f"  ... and {len(positions) - 15} more (check next iteration)")
+            summary_lines.append("")
+        else:
+            summary_lines.append("📈 No positions (100% cash)")
+            summary_lines.append("")
+        
+        # Add pending orders (CRITICAL for next iteration)
+        summary_lines.append(f"=" * 80)
         if open_orders:
-            summary_lines.append(f"\n{'='*60}")
-            summary_lines.append(f"PENDING ORDERS (Monitor in next iteration):")
-            summary_lines.append(f"{'='*60}")
-            summary_lines.append(
-                f"⚠️  {len(open_orders)} order(s) pending - may not be filled yet!"
-            )
-            summary_lines.append("These orders could:")
-            summary_lines.append("  - Fill later today (if market is open)")
-            summary_lines.append("  - Fill tomorrow (if market is closed)")
-            summary_lines.append("  - Never fill (if price doesn't reach limit)")
+            summary_lines.append(f"⚠️  PENDING ORDERS - ACTION REQUIRED:")
+            summary_lines.append(f"=" * 80)
+            summary_lines.append(f"You have {len(open_orders)} order(s) that may or may not be filled.")
             summary_lines.append("")
             
             for order in open_orders[:10]:
                 order_id = order.get('id', 'N/A')
-                # Convert UUID to string if needed
                 order_id_str = str(order_id)[:8] if order_id != 'N/A' else 'N/A'
                 summary_lines.append(
-                    f"  - {order.get('symbol')}: {order.get('side')} {order.get('qty')} "
-                    f"@ ${order.get('limit_price', 'market')} "
-                    f"(Status: {order.get('status', 'pending')}, "
-                    f"ID: {order_id_str})"
+                    f"  • {order.get('symbol')}: {order.get('side').upper()} {order.get('qty')} shares "
+                    f"@ ${order.get('limit_price', 'market')} | Status: {order.get('status', 'pending')} | ID: {order_id_str}"
                 )
             if len(open_orders) > 10:
                 summary_lines.append(f"  ... and {len(open_orders) - 10} more")
-            
-            summary_lines.append("\n⚠️  NEXT ITERATION ACTION ITEMS:")
-            summary_lines.append("  1. Check if pending orders filled")
-            summary_lines.append("  2. Cancel orders that are no longer relevant")
-            summary_lines.append("  3. Don't place duplicate orders for same stocks")
+            summary_lines.append("")
         else:
-            summary_lines.append(f"\nNo pending orders")
+            summary_lines.append(f"✅ NO PENDING ORDERS")
+            summary_lines.append(f"=" * 80)
+            summary_lines.append("All previous orders have been filled or cancelled.")
+            summary_lines.append("")
         
-        # Analysis summary
-        summary_lines.append(f"\n{'='*60}")
-        summary_lines.append(f"ANALYSIS SUMMARY:")
-        summary_lines.append(f"{'='*60}")
-        summary_lines.append(f"- Stocks Analyzed: {self.analyses_requested}/{self.max_analyses}")
+        # Action items for next iteration
+        summary_lines.append(f"=" * 80)
+        summary_lines.append(f"🎯 ACTION ITEMS FOR NEXT ITERATION:")
+        summary_lines.append(f"=" * 80)
+        summary_lines.append("")
         
-        if self.analyzed_stocks:
-            summary_lines.append(f"- Tickers Analyzed:")
-            for ticker, info in self.analyzed_stocks.items():
-                summary_lines.append(f"  - {ticker}: {info.get('decision', 'UNKNOWN')}")
-        else:
-            summary_lines.append(f"- No stocks analyzed this iteration")
+        action_items = []
         
-        # Trading decisions (made by LLM)
-        if self.trades_executed:
-            summary_lines.append(f"\n{'='*60}")
-            summary_lines.append(f"TRADING DECISIONS (by LLM):")
-            summary_lines.append(f"{'='*60}")
-            summary_lines.append(f"- Total Trades: {len(self.trades_executed)}")
-            for trade in self.trades_executed:
-                if trade['action'] == 'BUY':
-                    summary_lines.append(
-                        f"  - BUY {trade['ticker']}: ${trade.get('value', 0):,.2f}"
-                    )
-                elif trade['action'] == 'SELL':
-                    summary_lines.append(
-                        f"  - SELL {trade['ticker']}: {trade.get('quantity', 0)} shares"
-                    )
-                summary_lines.append(f"    Reasoning: {trade.get('reasoning', 'N/A')[:80]}...")
-        else:
-            summary_lines.append(f"\n- No trades executed this iteration")
-        
-        # Cost metrics
-        summary_lines.append(f"\n{'='*60}")
-        summary_lines.append(f"COST OPTIMIZATION METRICS:")
-        summary_lines.append(f"{'='*60}")
-        summary_lines.append(f"- Workflow: Single-pass (no iteration loop)")
-        summary_lines.append(f"- Web Searches Used: {self.web_searches_used}/1")
-        summary_lines.append(f"- LLM Model: gpt-4.1-nano (cost optimized)")
-        summary_lines.append(f"- Analysts per Stock: 2 (market + news)")
-        summary_lines.append(f"- Total LLM Calls: ~{3 + (len(self.analyzed_stocks) * 10)}")
-        
-        # Strategy notes
-        summary_lines.append(f"\n{'='*60}")
-        summary_lines.append(f"NOTES FOR NEXT ITERATION:")
-        summary_lines.append(f"{'='*60}")
+        # Check pending orders
         if open_orders:
-            summary_lines.append(f"⚠️  Monitor pending orders - they may fill before next run")
+            action_items.append(f"1. CHECK PENDING ORDERS:")
+            action_items.append(f"   • {len(open_orders)} order(s) may have filled - use get_current_positions() to check")
+            action_items.append(f"   • Cancel any orders that are no longer relevant")
+            action_items.append(f"   • Don't place duplicate orders for same stocks")
+            action_items.append("")
+        
+        # Review position performance
+        if positions:
+            # Find positions that need attention
+            strong_performers = [p for p in positions if (p.get('unrealized_plpc', 0) * 100) > 10]
+            poor_performers = [p for p in positions if (p.get('unrealized_plpc', 0) * 100) < -10]
+            
+            action_num = 2 if open_orders else 1
+            action_items.append(f"{action_num}. REVIEW POSITION PERFORMANCE:")
+            
+            if strong_performers:
+                strong_tickers = [p['symbol'] for p in strong_performers[:5]]
+                action_items.append(f"   • Strong performers (>10% gain): {', '.join(strong_tickers)}")
+                action_items.append(f"     Consider: Taking profits or adding more")
+            
+            if poor_performers:
+                poor_tickers = [p['symbol'] for p in poor_performers[:5]]
+                action_items.append(f"   • Poor performers (<-10% loss): {', '.join(poor_tickers)}")
+                action_items.append(f"     Consider: Cutting losses or averaging down if fundamentals strong")
+            
+            if not strong_performers and not poor_performers:
+                action_items.append(f"   • All positions performing within -10% to +10% range")
+            
+            action_items.append("")
+        
+        # Cash utilization
+        cash = account.get('cash', 0)
+        portfolio_value = account.get('portfolio_value', 0)
+        cash_pct = (cash / portfolio_value * 100) if portfolio_value > 0 else 0
+        
+        action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
+        action_items.append(f"{action_num}. CASH UTILIZATION:")
+        action_items.append(f"   • Available cash: ${cash:,.2f} ({cash_pct:.1f}% of portfolio)")
+        
+        if cash_pct > 50:
+            action_items.append(f"   • High cash allocation - consider finding investment opportunities")
+        elif cash_pct > 20:
+            action_items.append(f"   • Moderate cash allocation - can make new investments")
+        elif cash_pct < 5:
+            action_items.append(f"   • Low cash - may need to sell positions before buying new ones")
+        else:
+            action_items.append(f"   • Balanced cash allocation")
+        action_items.append("")
+        
+        # Recent analysis
         if self.analyzed_stocks:
-            summary_lines.append(f"✅ Recent analysis available in S3 for: {', '.join(self.analyzed_stocks.keys())}")
-        summary_lines.append(f"Strategy: LLM-driven with controlled costs")
-        summary_lines.append(f"Focus: Maximize profits through informed analysis")
+            action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
+            action_items.append(f"{action_num}. RECENT ANALYSIS AVAILABLE:")
+            action_items.append(f"   • Analyzed in this iteration: {', '.join(self.analyzed_stocks.keys())}")
+            action_items.append(f"   • Use read_historical_report(ticker, 'final_trade_decision') to review")
+            action_items.append("")
+        
+        # General reminder
+        action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
+        action_items.append(f"{action_num}. REMEMBER YOUR AUTONOMY:")
+        action_items.append(f"   • You manage the ENTIRE portfolio, not just analyzed stocks")
+        action_items.append(f"   • You can buy, sell, or hold ANY position based on:")
+        action_items.append(f"     - Performance (P&L)")
+        action_items.append(f"     - Market conditions")
+        action_items.append(f"     - Portfolio allocation")
+        action_items.append(f"     - Your judgment")
+        action_items.append(f"   • Analysis is helpful but NOT required for every decision")
+        
+        summary_lines.extend(action_items)
+        summary_lines.append("")
+        summary_lines.append(f"=" * 80)
+        summary_lines.append(f"END OF ITERATION SUMMARY")
+        summary_lines.append(f"=" * 80)
         
         return "\n".join(summary_lines)
 
