@@ -186,9 +186,8 @@ class OrchestratorPortfolioManager:
             if self.web_search_enabled and web_search_query:
                 market_context = self._handle_web_search(web_search_query)
                 self.logger.log_system(f"✅ Market context gathered ({len(market_context)} chars)")
-                # Log a preview to verify we got useful content
-                preview = market_context[:300].replace('\n', ' ')
-                self.logger.log_system(f"   Preview: {preview}...")
+                # Log the FULL content (no truncation) - user wants to see everything
+                self.logger.log_system(f"   Full Market Context:\n{market_context}")
             else:
                 market_context = "Web search disabled. Using portfolio data only."
                 self.logger.log_system("ℹ️  Web search disabled, proceeding with portfolio data")
@@ -735,12 +734,20 @@ Examples:
         prompt_parts.append("🤖 YOU ARE THE AUTONOMOUS PORTFOLIO MANAGER 🤖")
         prompt_parts.append("=" * 80)
         prompt_parts.append("")
+        prompt_parts.append("🚨 CRITICAL: YOU ARE FULLY AUTONOMOUS - DO NOT ASK FOR PERMISSION! 🚨")
+        prompt_parts.append("")
         prompt_parts.append("You manage this entire portfolio. The analyzed stocks are RESEARCH to help you,")
         prompt_parts.append("but YOU make ALL trading decisions based on:")
         prompt_parts.append("  • Your analysis research (if available)")
         prompt_parts.append("  • Current portfolio state (positions, P&L, cash)")
         prompt_parts.append("  • Market conditions and opportunities")
         prompt_parts.append("  • Your judgment as a portfolio manager")
+        prompt_parts.append("")
+        prompt_parts.append("YOU MUST:")
+        prompt_parts.append("  ⚠️  EXECUTE trades directly - DO NOT ask for permission or confirmation")
+        prompt_parts.append("  ⚠️  MAKE decisions autonomously - DO NOT ask 'Should I?' or 'Shall I proceed?'")
+        prompt_parts.append("  ⚠️  ACT on your analysis - if analysis says BUY, then BUY (if you have cash)")
+        prompt_parts.append("  ⚠️  DECIDE amounts yourself - DO NOT ask user to specify amounts or percentages")
         prompt_parts.append("")
         prompt_parts.append("YOU CAN:")
         prompt_parts.append("  ✅ BUY new stocks (if you have cash)")
@@ -752,9 +759,38 @@ Examples:
         prompt_parts.append("  ✅ Make decisions on stocks NOT analyzed (based on portfolio state)")
         prompt_parts.append("  ✅ Do NOTHING if the portfolio is well-positioned")
         prompt_parts.append("")
-        prompt_parts.append("The analysis is a TOOL, not a constraint. You're in charge!")
+        prompt_parts.append("EXAMPLE DECISIONS (what you SHOULD do):")
+        prompt_parts.append("  ✅ 'Analysis recommends BUY for NVDA. I have $86k cash. I will invest $30k in NVDA.'")
+        prompt_parts.append("  ✅ 'Analysis says SELL MT but we don't own it. Skipping MT. Proceeding with NVDA buy.'")
+        prompt_parts.append("  ✅ 'Portfolio has 3 positions performing well. No action needed. Calling review_and_decide.'")
+        prompt_parts.append("")
+        prompt_parts.append("WRONG BEHAVIOR (what you MUST AVOID):")
+        prompt_parts.append("  ❌ 'Shall I proceed with buying NVDA?' - NO! Just do it!")
+        prompt_parts.append("  ❌ 'Please specify the amount to invest' - NO! You decide!")
+        prompt_parts.append("  ❌ 'Should I sell MT?' - NO! Analyze the situation and decide!")
+        prompt_parts.append("")
+        prompt_parts.append("The analysis is a TOOL, not a constraint. You're in charge! ACT DECISIVELY!")
         prompt_parts.append("=" * 80)
         prompt_parts.append("")
+        
+        # Show previous iteration summary (if available) - CRITICAL for context
+        if last_summary and "No previous iteration" not in last_summary:
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("📋 PREVIOUS ITERATION SUMMARY - WHAT HAPPENED LAST TIME:")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("")
+            prompt_parts.append(last_summary)
+            prompt_parts.append("")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("END OF PREVIOUS ITERATION SUMMARY")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("")
+            prompt_parts.append("💡 USE THIS CONTEXT:")
+            prompt_parts.append("  • Check if previous pending orders are now filled (compare with current positions)")
+            prompt_parts.append("  • Review action items from previous iteration")
+            prompt_parts.append("  • Consider what was analyzed last time (avoid re-analyzing too soon)")
+            prompt_parts.append("  • Build on previous decisions (don't contradict recent actions without good reason)")
+            prompt_parts.append("")
         
         # Summarize what was analyzed
         if self.analyzed_stocks:
