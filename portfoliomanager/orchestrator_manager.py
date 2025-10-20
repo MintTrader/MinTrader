@@ -1519,210 +1519,233 @@ Examples:
     
     def generate_iteration_summary(self, open_orders=None) -> str:
         """
-        Generate summary for next iteration focused on actionable information.
+        Ask the agent to generate its own iteration summary based on what it did.
         
-        This summary is saved to S3 and retrieved by the next iteration to help
-        the agent understand what happened and what needs to be checked/done next.
+        The agent reflects on the iteration and writes notes to itself for the next wake-up.
+        This is more natural and contextual than a formatted template.
         
         Args:
-            open_orders: Current open orders to include in summary
+            open_orders: Current open orders to include in context
             
         Returns:
-            Summary string optimized for agent context
+            Agent-generated summary for next iteration
         """
+        from langchain_openai import ChatOpenAI
+        
+        # Get current state for agent context
         account = get_account()
         positions = get_positions()
         
-        summary_lines = [
-            f"ITERATION: {self.iteration_id}",
-            f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"",
-            f"=" * 80,
-            f"WHAT HAPPENED IN THIS ITERATION:",
-            f"=" * 80,
-            f"",
+        # Build context about what happened this iteration
+        iteration_context = {
+            "iteration_id": self.iteration_id,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "analyzed_stocks": self.analyzed_stocks,
+            "trades_executed": self.trades_executed,
+            "account": {
+                "portfolio_value": account.get('portfolio_value', 0),
+                "cash": account.get('cash', 0),
+                "buying_power": account.get('buying_power', 0)
+            },
+            "positions": [
+                {
+                    "symbol": p['symbol'],
+                    "qty": p['qty'],
+                    "market_value": p.get('market_value', 0),
+                    "pnl_pct": (p.get('unrealized_plpc', 0) * 100)
+                }
+                for p in positions[:20]  # Top 20 positions
+            ],
+            "open_orders": [
+                {
+                    "symbol": o.get('symbol'),
+                    "side": o.get('side'),
+                    "qty": o.get('qty'),
+                    "status": o.get('status'),
+                    "limit_price": o.get('limit_price')
+                }
+                for o in (open_orders[:10] if open_orders else [])
+            ]
+        }
+        
+        # Build context strings
+        analyzed_str = "None this iteration"
+        analyzed_stocks_dict = iteration_context.get('analyzed_stocks', {})
+        if analyzed_stocks_dict and isinstance(analyzed_stocks_dict, dict):
+            analyzed_list = []
+            for ticker, info in analyzed_stocks_dict.items():
+                if isinstance(info, dict):
+                    decision = info.get('decision', 'UNKNOWN')
+                    reasoning = info.get('reasoning', 'N/A')
+                    analyzed_list.append(f"- {ticker}: {decision} ({reasoning})")
+            if analyzed_list:
+                analyzed_str = "\n".join(analyzed_list)
+        
+        trades_str = "No trades this iteration"
+        trades_list_data = iteration_context.get('trades_executed', [])
+        if trades_list_data and isinstance(trades_list_data, list):
+            trades_list = []
+            for t in trades_list_data:
+                if isinstance(t, dict):
+                    action = t.get('action', 'UNKNOWN')
+                    ticker = t.get('ticker', 'N/A')
+                    quantity = t.get('quantity', 0)
+                    price = t.get('price', 0)
+                    reasoning = t.get('reasoning', 'N/A')
+                    trades_list.append(f"- {action} {ticker}: {quantity} shares @ ${price:.2f} - {reasoning}")
+            if trades_list:
+                trades_str = "\n".join(trades_list)
+        
+        positions_str = "No positions"
+        positions_data = iteration_context.get('positions', [])
+        if positions_data and isinstance(positions_data, list):
+            sorted_positions = sorted(positions_data, key=lambda x: x.get('market_value', 0) if isinstance(x, dict) else 0, reverse=True)[:10]
+            positions_list = []
+            for p in sorted_positions:
+                if isinstance(p, dict):
+                    symbol = p.get('symbol', 'N/A')
+                    qty = p.get('qty', 0)
+                    market_value = p.get('market_value', 0)
+                    pnl_pct = p.get('pnl_pct', 0)
+                    positions_list.append(f"- {symbol}: {qty} shares, ${market_value:,.2f}, P&L {pnl_pct:+.1f}%")
+            if positions_list:
+                positions_str = "\n".join(positions_list)
+        
+        orders_str = "No pending orders"
+        orders_data = iteration_context.get('open_orders', [])
+        if orders_data and isinstance(orders_data, list):
+            orders_list = []
+            for o in orders_data:
+                if isinstance(o, dict):
+                    side = str(o.get('side', 'unknown')).upper()
+                    symbol = o.get('symbol', 'N/A')
+                    qty = o.get('qty', 0)
+                    limit_price = o.get('limit_price', 'market')
+                    status = o.get('status', 'unknown')
+                    orders_list.append(f"- {side} {symbol}: {qty} shares @ ${limit_price}, status: {status}")
+            if orders_list:
+                orders_str = "\n".join(orders_list)
+        
+        # Extract account info with type safety
+        account_info = iteration_context.get('account', {})
+        portfolio_value = account_info.get('portfolio_value', 0) if isinstance(account_info, dict) else 0
+        cash = account_info.get('cash', 0) if isinstance(account_info, dict) else 0
+        
+        # Extract iteration metadata
+        iteration_id = iteration_context.get('iteration_id', 'unknown')
+        timestamp = iteration_context.get('timestamp', 'unknown')
+        num_positions = len(iteration_context.get('positions', []))
+        
+        # Prompt the agent to reflect and summarize for itself
+        prompt = f"""You are a portfolio manager who just completed an iteration. 
+Write a natural, conversational summary for yourself to read when you wake up for the next iteration.
+
+This is YOUR memory - write it like you're leaving notes for your future self. Be specific about:
+- What you researched and why
+- What you learned about the market or specific stocks
+- What trades you made and your reasoning
+- What you're concerned about or watching
+- What you're planning to check or do next time
+- Any thoughts, observations, or reminders to yourself
+
+Don't use emojis, headers, or numbered lists. Just write naturally like you're journaling.
+
+Here's what happened this iteration:
+
+ITERATION: {iteration_id}
+TIME: {timestamp}
+
+STOCKS I ANALYZED:
+{analyzed_str}
+
+TRADES I EXECUTED:
+{trades_str}
+
+CURRENT PORTFOLIO STATE:
+- Total Value: ${portfolio_value:,.2f}
+- Cash: ${cash:,.2f}
+- Number of Positions: {num_positions}
+
+TOP POSITIONS (by value):
+{positions_str}
+
+PENDING ORDERS:
+{orders_str}
+
+Now write your summary for your next wake-up. Be specific, honest, and thoughtful. What do you need to remember? What do you want to check? What are you thinking about?"""
+
+        try:
+            # Use the manager's LLM with slightly higher temperature for natural writing
+            llm = ChatOpenAI(
+                model=self.llm.model_name if hasattr(self.llm, 'model_name') else 'gpt-4o-mini',
+                temperature=0.7
+            )
+            response = llm.invoke(prompt)
+            agent_summary = str(response.content) if response.content else ""
+            
+            # Add metadata header for reference
+            header = f"ITERATION {iteration_id} - {timestamp}\n"
+            header += "=" * 80 + "\n\n"
+            
+            return header + agent_summary
+            
+        except Exception as e:
+            self.logger.log_system(f"Error generating agent summary: {e}")
+            # Fallback to basic summary if agent generation fails
+            return self._generate_basic_summary(iteration_context)
+    
+    def _generate_basic_summary(self, context: Dict[str, Any]) -> str:
+        """
+        Fallback basic summary if agent generation fails.
+        
+        Args:
+            context: Iteration context dictionary
+            
+        Returns:
+            Basic text summary
+        """
+        lines = [
+            f"ITERATION {context.get('iteration_id', 'unknown')} - {context.get('timestamp', 'unknown')}",
+            "=" * 80,
+            "",
         ]
         
-        # What did we research?
-        if self.analyzed_stocks:
-            summary_lines.append("📊 RESEARCH COMPLETED:")
-            for ticker, info in self.analyzed_stocks.items():
-                summary_lines.append(f"  • {ticker}: {info.get('decision', 'UNKNOWN')} (analyzed on {info.get('date', 'unknown date')})")
-            summary_lines.append("")
-        else:
-            summary_lines.append("📊 No new research this iteration")
-            summary_lines.append("")
+        # Analyzed stocks
+        analyzed_stocks = context.get('analyzed_stocks', {})
+        if analyzed_stocks and isinstance(analyzed_stocks, dict):
+            lines.append("Analyzed this iteration:")
+            for ticker, info in analyzed_stocks.items():
+                if isinstance(info, dict):
+                    lines.append(f"  {ticker}: {info.get('decision', 'UNKNOWN')}")
+            lines.append("")
         
-        # What trades did we make?
-        if self.trades_executed:
-            summary_lines.append(f"💼 TRADES EXECUTED ({len(self.trades_executed)}):")
-            for trade in self.trades_executed:
-                if trade['action'] == 'BUY':
-                    summary_lines.append(
-                        f"  • BUY {trade['ticker']}: {trade.get('quantity', 0)} shares @ ${trade.get('price', 0):.2f} "
-                        f"(Total: ${trade.get('value', 0):,.2f})"
-                    )
-                elif trade['action'] == 'SELL':
-                    summary_lines.append(
-                        f"  • SELL {trade['ticker']}: {trade.get('quantity', 0)} shares @ ${trade.get('price', 0):.2f} "
-                        f"(Total: ${trade.get('value', 0):,.2f})"
-                    )
-                summary_lines.append(f"    Reason: {trade.get('reasoning', 'N/A')}")
-            summary_lines.append("")
-        else:
-            summary_lines.append("💼 No trades executed this iteration")
-            summary_lines.append("")
+        # Trades
+        trades_executed = context.get('trades_executed', [])
+        if trades_executed and isinstance(trades_executed, list):
+            lines.append("Trades executed:")
+            for trade in trades_executed:
+                if isinstance(trade, dict):
+                    action = trade.get('action', 'UNKNOWN')
+                    ticker = trade.get('ticker', 'N/A')
+                    quantity = trade.get('quantity', 0)
+                    lines.append(f"  {action} {ticker}: {quantity} shares")
+            lines.append("")
         
-        # Current portfolio state
-        summary_lines.extend([
-            f"=" * 80,
-            f"CURRENT PORTFOLIO STATE:",
-            f"=" * 80,
-            f"",
-            f"💰 ACCOUNT:",
-            f"  • Total Value: ${account.get('portfolio_value', 0):,.2f}",
-            f"  • Cash Available: ${account.get('cash', 0):,.2f} ⚠️ Use this for buying",
-            f"  • Buying Power: ${account.get('buying_power', 0):,.2f} (DO NOT USE - margin)",
-            f"",
-        ])
+        # Account state
+        account = context.get('account', {})
+        if isinstance(account, dict):
+            portfolio_value = account.get('portfolio_value', 0)
+            cash = account.get('cash', 0)
+            lines.append(f"Portfolio value: ${portfolio_value:,.2f}")
+            lines.append(f"Cash available: ${cash:,.2f}")
         
-        # Add position details with actionable insights
-        if positions:
-            summary_lines.append(f"📈 POSITIONS ({len(positions)}):")
-            for p in positions[:15]:  # Show more positions for better context
-                pnl_pct = (p.get('unrealized_plpc', 0) * 100)
-                market_value = p.get('market_value', 0)
-                
-                # Add performance indicators
-                if pnl_pct > 10:
-                    indicator = "🟢 Strong performer"
-                elif pnl_pct > 5:
-                    indicator = "🟢 Good"
-                elif pnl_pct > -5:
-                    indicator = "⚪ Neutral"
-                elif pnl_pct > -10:
-                    indicator = "🟡 Underperforming"
-                else:
-                    indicator = "🔴 Significant loss"
-                
-                summary_lines.append(
-                    f"  • {p['symbol']}: {p['qty']} shares | ${market_value:,.2f} | "
-                    f"P&L: {pnl_pct:+.1f}% | {indicator}"
-                )
-            if len(positions) > 15:
-                summary_lines.append(f"  ... and {len(positions) - 15} more (check next iteration)")
-            summary_lines.append("")
-        else:
-            summary_lines.append("📈 No positions (100% cash)")
-            summary_lines.append("")
+        positions = context.get('positions', [])
+        if isinstance(positions, list):
+            lines.append(f"Positions: {len(positions)}")
         
-        # Add pending orders (CRITICAL for next iteration)
-        summary_lines.append(f"=" * 80)
-        if open_orders:
-            summary_lines.append(f"⚠️  PENDING ORDERS - ACTION REQUIRED:")
-            summary_lines.append(f"=" * 80)
-            summary_lines.append(f"You have {len(open_orders)} order(s) that may or may not be filled.")
-            summary_lines.append("")
-            
-            for order in open_orders[:10]:
-                order_id = order.get('id', 'N/A')
-                order_id_str = str(order_id)[:8] if order_id != 'N/A' else 'N/A'
-                summary_lines.append(
-                    f"  • {order.get('symbol')}: {order.get('side').upper()} {order.get('qty')} shares "
-                    f"@ ${order.get('limit_price', 'market')} | Status: {order.get('status', 'pending')} | ID: {order_id_str}"
-                )
-            if len(open_orders) > 10:
-                summary_lines.append(f"  ... and {len(open_orders) - 10} more")
-            summary_lines.append("")
-        else:
-            summary_lines.append(f"✅ NO PENDING ORDERS")
-            summary_lines.append(f"=" * 80)
-            summary_lines.append("All previous orders have been filled or cancelled.")
-            summary_lines.append("")
+        open_orders = context.get('open_orders', [])
+        if open_orders and isinstance(open_orders, list):
+            lines.append(f"Pending orders: {len(open_orders)}")
         
-        # Action items for next iteration
-        summary_lines.append(f"=" * 80)
-        summary_lines.append(f"🎯 ACTION ITEMS FOR NEXT ITERATION:")
-        summary_lines.append(f"=" * 80)
-        summary_lines.append("")
-        
-        action_items = []
-        
-        # Check pending orders
-        if open_orders:
-            action_items.append(f"1. CHECK PENDING ORDERS:")
-            action_items.append(f"   • {len(open_orders)} order(s) may have filled - use get_current_positions() to check")
-            action_items.append(f"   • Cancel any orders that are no longer relevant")
-            action_items.append(f"   • Don't place duplicate orders for same stocks")
-            action_items.append("")
-        
-        # Review position performance
-        if positions:
-            # Find positions that need attention
-            strong_performers = [p for p in positions if (p.get('unrealized_plpc', 0) * 100) > 10]
-            poor_performers = [p for p in positions if (p.get('unrealized_plpc', 0) * 100) < -10]
-            
-            action_num = 2 if open_orders else 1
-            action_items.append(f"{action_num}. REVIEW POSITION PERFORMANCE:")
-            
-            if strong_performers:
-                strong_tickers = [p['symbol'] for p in strong_performers[:5]]
-                action_items.append(f"   • Strong performers (>10% gain): {', '.join(strong_tickers)}")
-                action_items.append(f"     Consider: Taking profits or adding more")
-            
-            if poor_performers:
-                poor_tickers = [p['symbol'] for p in poor_performers[:5]]
-                action_items.append(f"   • Poor performers (<-10% loss): {', '.join(poor_tickers)}")
-                action_items.append(f"     Consider: Cutting losses or averaging down if fundamentals strong")
-            
-            if not strong_performers and not poor_performers:
-                action_items.append(f"   • All positions performing within -10% to +10% range")
-            
-            action_items.append("")
-        
-        # Cash utilization
-        cash = account.get('cash', 0)
-        portfolio_value = account.get('portfolio_value', 0)
-        cash_pct = (cash / portfolio_value * 100) if portfolio_value > 0 else 0
-        
-        action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
-        action_items.append(f"{action_num}. CASH UTILIZATION:")
-        action_items.append(f"   • Available cash: ${cash:,.2f} ({cash_pct:.1f}% of portfolio)")
-        
-        if cash_pct > 50:
-            action_items.append(f"   • High cash allocation - consider finding investment opportunities")
-        elif cash_pct > 20:
-            action_items.append(f"   • Moderate cash allocation - can make new investments")
-        elif cash_pct < 5:
-            action_items.append(f"   • Low cash - may need to sell positions before buying new ones")
-        else:
-            action_items.append(f"   • Balanced cash allocation")
-        action_items.append("")
-        
-        # Recent analysis
-        if self.analyzed_stocks:
-            action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
-            action_items.append(f"{action_num}. RECENT ANALYSIS AVAILABLE:")
-            action_items.append(f"   • Analyzed in this iteration: {', '.join(self.analyzed_stocks.keys())}")
-            action_items.append(f"   • Use read_historical_report(ticker, 'final_trade_decision') to review")
-            action_items.append("")
-        
-        # General reminder
-        action_num = len([item for item in action_items if item and item[0].isdigit()]) + 1
-        action_items.append(f"{action_num}. REMEMBER YOUR AUTONOMY:")
-        action_items.append(f"   • You manage the ENTIRE portfolio, not just analyzed stocks")
-        action_items.append(f"   • You can buy, sell, or hold ANY position based on:")
-        action_items.append(f"     - Performance (P&L)")
-        action_items.append(f"     - Market conditions")
-        action_items.append(f"     - Portfolio allocation")
-        action_items.append(f"     - Your judgment")
-        action_items.append(f"   • Analysis is helpful but NOT required for every decision")
-        
-        summary_lines.extend(action_items)
-        summary_lines.append("")
-        summary_lines.append(f"=" * 80)
-        summary_lines.append(f"END OF ITERATION SUMMARY")
-        summary_lines.append(f"=" * 80)
-        
-        return "\n".join(summary_lines)
+        return "\n".join(lines)
 
