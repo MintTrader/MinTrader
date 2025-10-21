@@ -92,6 +92,7 @@ class StockSelector:
         )
         
         try:
+            # First attempt
             response = self.llm.invoke(prompt)
             content = str(response.content).strip() if response.content else ""
             
@@ -116,6 +117,42 @@ class StockSelector:
                         f"⚠️  LLM ignored exclusion list and selected: {excluded}. "
                         f"Filtered them out."
                     )
+                    
+                    # If ALL stocks were filtered out, give LLM another chance with stronger warning
+                    if len(selected_stocks) == 0 and len(original_selection) > 0:
+                        self.logger.log_system(
+                            "🔄 All stocks were filtered. Giving LLM another chance with stronger instructions..."
+                        )
+                        
+                        # Build a retry prompt with explicit exclusion warning
+                        retry_prompt = self._build_retry_prompt(
+                            excluded, stocks_to_exclude, market_context, positions, account
+                        )
+                        
+                        retry_response = self.llm.invoke(retry_prompt)
+                        retry_content = str(retry_response.content).strip() if retry_response.content else ""
+                        
+                        # Extract JSON from retry
+                        retry_start = retry_content.find('[')
+                        retry_end = retry_content.rfind(']') + 1
+                        if retry_start >= 0 and retry_end > retry_start:
+                            retry_json = retry_content[retry_start:retry_end]
+                            retry_stocks = json.loads(retry_json)
+                            retry_stocks = [s.upper() for s in retry_stocks if isinstance(s, str)]
+                            
+                            # Filter again
+                            selected_stocks = [s for s in retry_stocks if s not in stocks_to_exclude]
+                            
+                            if len(retry_stocks) > len(selected_stocks):
+                                still_excluded = [s for s in retry_stocks if s in stocks_to_exclude]
+                                self.logger.log_system(
+                                    f"⚠️  LLM still selected excluded stocks on retry: {still_excluded}"
+                                )
+                            
+                            if selected_stocks:
+                                self.logger.log_system(
+                                    f"✅ Retry successful! Selected {len(selected_stocks)} stocks: {selected_stocks}"
+                                )
                 elif stocks_to_exclude:
                     self.logger.log_system(
                         f"✅ LLM successfully avoided {len(stocks_to_exclude)} recently analyzed stocks"
@@ -137,6 +174,64 @@ class StockSelector:
         except Exception as e:
             self.logger.log_system(f"⚠️  Error deciding stocks: {e}")
             return []
+    
+    def _build_retry_prompt(
+        self, excluded: List[str], stocks_to_exclude: set, 
+        market_context: str, positions: List, account: Dict
+    ) -> str:
+        """Build a retry prompt with stronger warnings about excluded stocks."""
+        excluded_str = ", ".join(excluded)
+        all_excluded_str = ", ".join(sorted(stocks_to_exclude))
+        
+        # Extract potential tickers from market context
+        import re
+        potential_tickers = re.findall(r'\b[A-Z]{2,5}\b', market_context[:2000])
+        common_words = {
+            'THE', 'AND', 'FOR', 'ARE', 'NOT', 'BUT', 'WITH', 
+            'FROM', 'THIS', 'THAT', 'NYSE', 'NASDAQ', 'ETF', 'IPO', 'CEO', 'CFO'
+        }
+        potential_tickers = [
+            t for t in potential_tickers 
+            if t not in common_words and t not in stocks_to_exclude and len(t) <= 5
+        ]
+        unique_tickers = list(dict.fromkeys(potential_tickers))[:15]
+        
+        prompt = f"""🚨 CRITICAL: YOUR PREVIOUS SELECTION WAS INVALID! 🚨
+
+You just selected: {excluded_str}
+
+❌ PROBLEM: These stocks were analyzed in the past 0-2 days!
+   - They are in the EXCLUSION LIST: {all_excluded_str}
+   - You CANNOT select them again so soon
+   - This wasted an iteration!
+
+🎯 YOUR TASK NOW: Select DIFFERENT stocks for analysis
+
+AVAILABLE OPTIONS FROM MARKET CONTEXT:
+  Potential tickers mentioned: {', '.join(unique_tickers) if unique_tickers else 'None clearly identified'}
+
+REQUIREMENTS:
+  1. ✅ Select 1-3 NEW stocks NOT in exclusion list
+  2. ❌ DO NOT select any of these: {all_excluded_str}
+  3. 🔍 Look for companies mentioned in market context
+  4. 💡 Convert company names to ticker symbols if needed
+  5. ⚠️  If NO valid opportunities exist, return []
+
+Market Context (for reference):
+{market_context[:1500]}
+
+Cash Available: ${account.get('cash', 0):,.2f}
+Current Positions: {len(positions)}
+
+Respond with ONLY a JSON list of ticker symbols.
+Examples:
+- ["AAPL", "MSFT"]: Two valid stocks NOT in exclusion list
+- ["TSLA"]: One valid stock
+- []: No valid opportunities found
+
+DO NOT select {excluded_str} or any stock in the exclusion list!
+"""
+        return prompt
     
     def _build_exclusion_list(self, recent_analysis: Dict[str, Any]) -> tuple:
         """
@@ -168,7 +263,25 @@ class StockSelector:
         """Build the stock selection prompt for LLM."""
         context_parts = []
         
-        # FIRST: Show complete analysis history with dates (MOST IMPORTANT)
+        # FIRST: Show hard exclusion list at the very top (MOST CRITICAL)
+        if stocks_to_exclude:
+            context_parts.append("=" * 80)
+            context_parts.append("🚨 CRITICAL - DO NOT SELECT THESE STOCKS! 🚨")
+            context_parts.append("=" * 80)
+            context_parts.append("")
+            context_parts.append("The following stocks were analyzed in the past 0-2 days.")
+            context_parts.append("❌ ABSOLUTELY DO NOT SELECT THEM! ❌")
+            context_parts.append("")
+            excluded_tickers_str = ", ".join(sorted(stocks_to_exclude))
+            context_parts.append(f"🚫 EXCLUSION LIST: {excluded_tickers_str}")
+            context_parts.append("")
+            context_parts.append("If you select any of these, they will be filtered out and you'll waste an iteration!")
+            context_parts.append("Check this list BEFORE making your selection!")
+            context_parts.append("")
+            context_parts.append("=" * 80)
+            context_parts.append("")
+        
+        # SECOND: Show complete analysis history with dates
         context_parts.append("=" * 80)
         context_parts.append("📊 COMPLETE STOCK ANALYSIS HISTORY (Past 14 Days)")
         context_parts.append("=" * 80)
@@ -227,16 +340,6 @@ class StockSelector:
         
         context_parts.append("")
         context_parts.append("=" * 80)
-        context_parts.append("")
-        
-        # SECOND: Simplified exclusion reminder
-        if stocks_to_exclude:
-            excluded_tickers_str = ", ".join(sorted(stocks_to_exclude))
-            context_parts.append("⚠️  QUICK REMINDER - DO NOT SELECT: " + excluded_tickers_str)
-            context_parts.append("   (These are in the 🔴 VERY RECENT category above)")
-        else:
-            context_parts.append("✅ No hard exclusions - use the analysis history above to guide your choices")
-        
         context_parts.append("")
         
         # Add schedule information
@@ -349,10 +452,16 @@ class StockSelector:
 YOUR TASK: SELECT 0-3 STOCKS FOR ANALYSIS
 ================================================================================
 
-🔍 STEP 1: CHECK THE ANALYSIS HISTORY TABLE AT THE TOP
-   - Review the "📊 COMPLETE STOCK ANALYSIS HISTORY" section above
+🚨 STEP 0: CHECK THE EXCLUSION LIST FIRST! (MOST CRITICAL!)
+   - Look at the "🚨 CRITICAL - DO NOT SELECT THESE STOCKS!" section at the TOP
+   - These stocks were analyzed 0-2 days ago
+   - ❌ NEVER select them - they will be filtered out!
+   - This is a HARD rule - no exceptions!
+
+🔍 STEP 1: REVIEW THE COMPLETE ANALYSIS HISTORY
+   - Check the "📊 COMPLETE STOCK ANALYSIS HISTORY" section
    - Note which stocks were analyzed and when
-   - 🔴 VERY RECENT (0-2 days): NEVER re-analyze these
+   - 🔴 VERY RECENT (0-2 days): In exclusion list - DO NOT select
    - 🟡 RECENT (3-6 days): Only if major news
    - 🟢 OLDER (7-14 days): Can re-analyze if needed
    - Any stock NOT in the table: Fresh analysis available

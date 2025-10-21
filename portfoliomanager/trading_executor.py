@@ -54,7 +54,7 @@ class TradingExecutor:
         
         try:
             messages: List[BaseMessage] = [HumanMessage(content=prompt)]
-            max_iterations = 20  # Prevent infinite loops
+            max_iterations = 50  # Increased limit to allow more complex decision-making
             
             for iteration in range(max_iterations):
                 # Invoke LLM with tools
@@ -76,7 +76,10 @@ class TradingExecutor:
                         tool_name = tool_call['name']
                         tool_args = tool_call['args']
                         
-                        self.logger.log_system(f"  🔧 Tool call: {tool_name}({tool_args})")
+                        # Log with timestamp for debugging
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.logger.log_system(f"  🔧 [{timestamp}] Tool call: {tool_name}({tool_args})")
                         
                         # Handle trading tools
                         result = self._handle_tool_call(
@@ -95,7 +98,7 @@ class TradingExecutor:
                     self.logger.log_system("✅ LLM completed trading decisions (no more tool calls)")
                     return
             
-            self.logger.log_system("⚠️  Reached maximum iterations, ending decision phase")
+            self.logger.log_system(f"⚠️  Reached maximum iterations ({max_iterations}), ending decision phase")
             
         except Exception as e:
             self.logger.log_system(f"❌ Error in LLM trading decisions: {e}")
@@ -337,12 +340,24 @@ class TradingExecutor:
         elif tool_name == 'get_open_orders':
             return self._get_open_orders_info()
         
+        elif tool_name == 'get_position_details':
+            return self._get_position_details_info(tool_args, positions)
+        
         elif tool_name == 'modify_order':
             return self._handle_modify_order(tool_args, open_orders)
         
         elif tool_name == 'review_and_decide':
             self.logger.log_system("✅ LLM signaled completion of trading decisions")
             return "Trading decision phase complete."
+        
+        # Handle raw data tools (get_stock_data, get_indicators)
+        elif tool_name == 'get_stock_data':
+            from tradingagents.agents.utils.core_stock_tools import get_stock_data
+            return str(get_stock_data.invoke(tool_args))
+        
+        elif tool_name == 'get_indicators':
+            from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+            return str(get_indicators.invoke(tool_args))
         
         else:
             return f"Tool {tool_name} called with args: {tool_args}"
@@ -581,6 +596,40 @@ class TradingExecutor:
                 f"  • {o.get('symbol')}: {side} {o.get('qty')} shares | "
                 f"ID: {order_id}"
             )
+        
+        return "\n".join(result_lines)
+    
+    def _get_position_details_info(self, tool_args: Dict, positions: List[Dict]) -> str:
+        """Get formatted position details for a specific ticker."""
+        ticker = str(tool_args.get('ticker', '')).upper()
+        
+        if not ticker:
+            return "❌ Error: ticker parameter is required"
+        
+        # Find position in current positions list
+        position = next((p for p in positions if p.get('symbol', '').upper() == ticker), None)
+        
+        if not position:
+            return f"❌ No position found for {ticker}. You do not currently hold this stock."
+        
+        # Format position details
+        qty = position.get('qty', 0)
+        avg_entry = position.get('avg_entry_price', 0)
+        current_price = position.get('current_price', 0)
+        market_value = position.get('market_value', 0)
+        cost_basis = position.get('cost_basis', 0)
+        unrealized_pl = position.get('unrealized_pl', 0)
+        unrealized_plpc = position.get('unrealized_plpc', 0) * 100
+        
+        result_lines = [
+            f"📊 POSITION DETAILS FOR {ticker}:",
+            f"  • Quantity: {qty} shares",
+            f"  • Average Entry Price: ${avg_entry:.2f}",
+            f"  • Current Price: ${current_price:.2f}",
+            f"  • Cost Basis: ${cost_basis:,.2f}",
+            f"  • Market Value: ${market_value:,.2f}",
+            f"  • Unrealized P&L: ${unrealized_pl:,.2f} ({unrealized_plpc:+.2f}%)"
+        ]
         
         return "\n".join(result_lines)
     
