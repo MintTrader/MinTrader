@@ -312,19 +312,33 @@ class StockSelector:
                 )
         
         # Market context
-        context_parts.append(f"\n=== MARKET CONTEXT ===\n{market_context[:3000]}")
+        context_parts.append(f"\n=== MARKET CONTEXT & NEW OPPORTUNITIES ===")
+        context_parts.append("Read this carefully for NEW stocks to analyze:")
+        context_parts.append("")
+        context_parts.append(market_context[:3000])
+        context_parts.append("")
         
         # Extract potential tickers from market context
         potential_tickers = re.findall(r'\b[A-Z]{2,5}\b', market_context[:3000])
         common_words = {
             'THE', 'AND', 'FOR', 'ARE', 'NOT', 'BUT', 'WITH', 
-            'FROM', 'THIS', 'THAT', 'NYSE', 'NASDAQ', 'ETF', 'IPO'
+            'FROM', 'THIS', 'THAT', 'NYSE', 'NASDAQ', 'ETF', 'IPO', 'CEO', 'CFO'
         }
         potential_tickers = [t for t in potential_tickers if t not in common_words and len(t) <= 5]
         
         if potential_tickers:
             unique_tickers = list(dict.fromkeys(potential_tickers))[:20]
-            context_parts.append(f"\n💡 STOCK TICKERS FOUND: {', '.join(unique_tickers)}")
+            context_parts.append(f"💡 POTENTIAL TICKERS EXTRACTED: {', '.join(unique_tickers)}")
+            context_parts.append("   (Note: May need manual ticker lookup for company names like 'General Motors' → GM)")
+        
+        # Add explicit reminder about new opportunities
+        context_parts.append("")
+        context_parts.append("🔍 LOOK FOR NEW OPPORTUNITIES IN THE MARKET CONTEXT ABOVE:")
+        context_parts.append("   - Companies mentioned with positive earnings (e.g., 'General Motors' → ticker: GM)")
+        context_parts.append("   - Stocks with strong momentum or news catalysts")
+        context_parts.append("   - Sectors showing strength")
+        context_parts.append("   - Convert company names to ticker symbols if needed")
+        context_parts.append("   - These are FRESH candidates - not in your analysis history!")
         
         # Build instruction section
         prompt = f"""Based on the portfolio state and market context, select 0-3 stocks to analyze for trading.
@@ -351,30 +365,64 @@ RULES:
 3. 💡 You can still TRADE recently analyzed stocks using read_historical_report
 
 SELECTION STRATEGY:
-1️⃣ EXISTING POSITIONS marked "⚠️ NEEDS ANALYSIS":
+
+🎯 YOUR PRIMARY JOB: FIND NEW OPPORTUNITIES!
+
+You should ACTIVELY look for new stocks to analyze, not just maintain existing positions.
+
+1️⃣ NEW INVESTMENT OPPORTUNITIES (PRIORITIZE THIS!):
+   ✅ Read the "MARKET CONTEXT & NEW OPPORTUNITIES" section carefully
+   ✅ Look for companies with:
+      - Strong earnings reports (e.g., "General Motors" with positive earnings → ticker: GM)
+      - Momentum and positive news (e.g., "RTX" mentioned positively → ticker: RTX)
+      - Growth catalysts (new products, partnerships, market expansion)
+      - Sector strength (e.g., if tech sector is strong, find tech stocks)
+   ✅ Convert company names to ticker symbols (e.g., "Coca-Cola" → KO, "Danaher" → DHR)
+   ✅ IMPORTANT: Cross-check with the analysis history table to avoid recently analyzed stocks
+   
+   💡 The market context is specifically designed to surface NEW opportunities!
+   💡 Don't ignore it - it's your primary source for finding what to analyze!
+
+2️⃣ EXISTING POSITIONS marked "⚠️ NEEDS ANALYSIS" (Secondary Priority):
    - These haven't been analyzed recently (check the history table!)
    - Prioritize positions with large gains/losses
    - Good candidates if they're NOT in the 🔴 VERY RECENT category
 
-2️⃣ NEW INVESTMENT OPPORTUNITIES:
-   - Look for stocks with growth potential (from market context)
-   - Companies with improving fundamentals
-   - Upcoming catalysts
-   - Undervalued companies
-   - IMPORTANT: Cross-check with the analysis history table!
-
 SUGGESTED APPROACH:
-• Check analysis history table for each stock you're considering
-• If 3+ positions need analysis → Select 2-3 that aren't recently analyzed
-• If 1-2 positions need analysis → Mix: 1-2 existing + 1 new (all not recently analyzed)
-• If all positions recently analyzed → Focus on new opportunities from market context
-• If portfolio well-positioned AND no fresh opportunities → Select 0 stocks
+• READ the market context section thoroughly - companies mentioned there are candidates!
+• If market context mentions companies with positive news → SELECT THEM (convert names to tickers)
+• If 1-2 positions need analysis → Mix: 1 new opportunity + 1-2 existing positions
+• If all positions recently analyzed → SELECT 2-3 NEW opportunities from market context
+• ONLY select 0 stocks if:
+  - Market context has NO actionable opportunities AND
+  - All positions were analyzed very recently (0-2 days) AND
+  - Portfolio is well-balanced with no concerns
+
+⚠️  IMPORTANT: Selecting 0 stocks means you're passing up ALL opportunities in the market context!
+    Make sure that's intentional - usually you should find 1-3 stocks to analyze.
 
 📋 EXAMPLES OF GOOD DECISION-MAKING:
-✅ "NVDA is in market context and NOT in analysis history → Good to select"
-✅ "AAPL position needs analysis, last analyzed 8 days ago (🟢) → OK to re-analyze"
-✅ "MSFT had analysis 1 day ago (🔴) → Skip, will use historical report for trading"
-✅ "GOOGL from market context, analyzed 5 days ago (🟡) → Skip unless major news"
+
+Example 1 - NEW OPPORTUNITIES FROM MARKET CONTEXT:
+✅ Market context says: "Strong earnings from General Motors, RTX, Danaher, Coca-Cola"
+✅ Decision: "I'll select GM, RTX, and DHR - all have positive news and aren't in my analysis history"
+✅ Result: ["GM", "RTX", "DHR"] - 3 new opportunities to analyze!
+
+Example 2 - MIXED APPROACH:
+✅ Market context mentions RTX with positive news (not in history)
+✅ I have GOOGL position, last analyzed 8 days ago (🟢)
+✅ Decision: "I'll analyze RTX (new opportunity) and GOOGL (existing position needing refresh)"
+✅ Result: ["RTX", "GOOGL"] - 1 new + 1 existing
+
+Example 3 - CONSERVATIVE (Only when justified):
+❌ BAD: "All my positions were analyzed yesterday, so I'll select []"
+✅ GOOD: "My positions were analyzed yesterday BUT market context shows GM and KO with strong earnings → ["GM", "KO"]"
+
+Example 4 - TRULY NO OPPORTUNITIES (Rare):
+✅ "Market context shows general market update with no specific stock opportunities"
+✅ "All positions analyzed 0-1 days ago"
+✅ "No concerning portfolio issues"
+✅ Decision: [] - Genuinely nothing to do this iteration
 
 Respond with ONLY a JSON list of ticker symbols.
 Examples:
