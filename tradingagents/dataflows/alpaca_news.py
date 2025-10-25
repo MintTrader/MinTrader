@@ -1,7 +1,11 @@
 from datetime import datetime
 import json
+import logging
 from alpaca.data.requests import NewsRequest
 from .alpaca_common import get_news_client, validate_alpaca_date
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 def get_news(ticker: str, start_date: str, end_date: str) -> str:
@@ -85,7 +89,7 @@ def get_news(ticker: str, start_date: str, end_date: str) -> str:
         return json.dumps(result, indent=2)
         
     except Exception as e:
-        print(f"Error fetching news from Alpaca for {ticker}: {e}")
+        logger.error(f"Error fetching news from Alpaca for {ticker}: {e}")
         # Re-raise exception so fallback mechanism can try next vendor
         raise
 

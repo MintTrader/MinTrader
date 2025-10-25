@@ -1,12 +1,16 @@
 # TradingAgents/graph/trading_graph.py
 
 import os
+import logging
 from pathlib import Path
 import json
 from datetime import date
 from typing import Dict, Any, Tuple, List, Optional
 
 from langgraph.prebuilt import ToolNode
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -159,6 +163,7 @@ class TradingAgentsGraph:
         """Run the trading agents graph for a company on a specific date."""
 
         self.ticker = company_name
+        logger.info(f"    🔬 Starting analysis for {company_name}...")
 
         # Initialize state
         init_agent_state = self.propagator.create_initial_state(
@@ -178,8 +183,14 @@ class TradingAgentsGraph:
 
             final_state = trace[-1]
         else:
-            # Standard mode without tracing
-            final_state = self.graph.invoke(init_agent_state, **args)
+            # Standard mode - log progress at high level
+            node_count = 0
+            for chunk in self.graph.stream(init_agent_state, **args):
+                node_count += 1
+                # Log which node is executing (optional - can be commented out if too verbose)
+                # logger.debug(f"      Node {node_count}: {list(chunk.keys())}")
+            
+            final_state = chunk
 
         # Store current state for reflection
         self.curr_state = final_state
@@ -187,8 +198,12 @@ class TradingAgentsGraph:
         # Log state
         self._log_state(trade_date, final_state)
 
+        # Process and return signal
+        processed_signal = self.process_signal(final_state["final_trade_decision"])
+        logger.info(f"    ✓ Analysis complete for {company_name}: {processed_signal}")
+        
         # Return decision and processed signal
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        return final_state, processed_signal
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""

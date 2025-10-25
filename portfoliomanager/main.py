@@ -9,10 +9,36 @@ import sys
 import os
 import argparse
 import asyncio
+import logging
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging - suppress MCP server logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Suppress verbose MCP server logs (these are very noisy in production)
+# The MCP library logs every tool request at INFO level
+logging.getLogger('mcp').setLevel(logging.ERROR)
+logging.getLogger('mcp.server').setLevel(logging.ERROR)
+logging.getLogger('mcp.client').setLevel(logging.ERROR)
+logging.getLogger('mcp.server.stdio').setLevel(logging.ERROR)
+logging.getLogger('langchain_mcp_adapters').setLevel(logging.WARNING)
+
+# Suppress other verbose loggers
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
+
+# Set environment variable to suppress MCP logs in subprocesses
+os.environ.setdefault('MCP_LOG_LEVEL', 'ERROR')
 
 from .config import PORTFOLIO_CONFIG
 from .graph_v2 import run_portfolio_iteration
@@ -21,6 +47,10 @@ from .graph_v2.portfolio_graph import stream_portfolio_iteration
 
 def main():
     """Main entry point for portfolio manager"""
+    # Print startup message before any MCP initialization
+    print("\n🚀 Starting Portfolio Manager...")
+    print("=" * 60)
+    
     parser = argparse.ArgumentParser(
         description="LangGraph-based Autonomous Portfolio Management System"
     )
@@ -43,6 +73,8 @@ def main():
     
     args = parser.parse_args()
     
+    logger.info("Portfolio Manager initialized")
+    
     # Load config
     config = PORTFOLIO_CONFIG.copy()
     if args.config:
@@ -55,66 +87,64 @@ def main():
         run_portfolio_manager(config, args.mode, args.stream)
     
     except KeyboardInterrupt:
-        print("\n\nShutting down gracefully...")
+        logger.info("\n\nShutting down gracefully...")
         sys.exit(0)
     except Exception as e:
-        print(f"\nFatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"\nFatal error: {e}", exc_info=True)
         sys.exit(1)
 
 
 def run_portfolio_manager(config, mode, stream=False):
     """Run LangGraph portfolio manager"""
     
-    print("\n" + "="*60)
-    print("🤖 LANGGRAPH PORTFOLIO MANAGER")
-    print("="*60)
-    print(f"\n✨ Architecture: Graph-based with MCP tools")
-    print(f"🤖 Decision Making: Fully autonomous")
-    print(f"📊 Max Analyses per Iteration: {config.get('max_stocks_to_analyze', 3)}")
-    print("="*60 + "\n")
+    logger.info("="*60)
+    logger.info("🤖 LANGGRAPH PORTFOLIO MANAGER")
+    logger.info("="*60)
+    logger.info(f"✨ Architecture: Graph-based with MCP tools")
+    logger.info(f"🤖 Decision Making: Fully autonomous")
+    logger.info(f"📊 Max Analyses per Iteration: {config.get('max_stocks_to_analyze', 3)}")
+    logger.info("="*60)
     
     if mode == 'scheduled':
-        print("⚠️  Scheduled mode not yet implemented")
-        print("Running single iteration instead...\n")
+        logger.warning("⚠️  Scheduled mode not yet implemented")
+        logger.info("Running single iteration instead...")
     
     if stream:
         # Streaming mode
-        print("🌊 Streaming mode enabled - showing real-time progress\n")
+        logger.info("🌊 Streaming mode enabled - showing real-time progress")
         asyncio.run(stream_portfolio_iteration(config))
     else:
         # Standard mode
-        print("Running single iteration...\n")
+        logger.info("Running single iteration...")
         result = run_portfolio_iteration(config)
         
         # Show results
-        print("\n" + "="*60)
-        print("📊 ITERATION RESULTS")
-        print("="*60)
-        print(f"✅ Iteration ID: {result['iteration_id']}")
-        print(f"✅ Phase: {result['phase']}")
-        print(f"✅ Stocks Analyzed: {len(result.get('analysis_results', {}))}")
-        print(f"✅ Trades Executed: {len(result.get('executed_trades', []))}")
+        logger.info("="*60)
+        logger.info("📊 ITERATION RESULTS")
+        logger.info("="*60)
+        logger.info(f"✅ Iteration ID: {result['iteration_id']}")
+        logger.info(f"✅ Phase: {result['phase']}")
+        logger.info(f"✅ Stocks Analyzed: {len(result.get('analysis_results', {}))}")
+        logger.info(f"✅ Trades Executed: {len(result.get('executed_trades', []))}")
         
         if result.get('executed_trades'):
-            print("\n📋 Executed Trades:")
+            logger.info("📋 Executed Trades:")
             for trade in result['executed_trades']:
                 status = trade.get('status', 'unknown')
                 ticker = trade.get('ticker')
                 action = trade.get('action')
                 
                 if status == 'submitted':
-                    print(f"  ✅ {action} {ticker} - Order ID: {trade.get('order_id')}")
+                    logger.info(f"  ✅ {action} {ticker} - Order ID: {trade.get('order_id')}")
                 else:
-                    print(f"  ❌ {action} {ticker} - Error: {trade.get('error', 'Unknown')}")
+                    logger.error(f"  ❌ {action} {ticker} - Error: {trade.get('error', 'Unknown')}")
         
         if result.get('error'):
-            print(f"\n⚠️  Error: {result['error']}")
+            logger.error(f"⚠️  Error: {result['error']}")
         
-        print("\n" + "="*60)
-        print("✅ Iteration complete!")
-        print("="*60 + "\n")
+        logger.info("="*60)
+        logger.info("✅ Iteration complete!")
+        logger.info("="*60)
 
 
 if __name__ == "__main__":

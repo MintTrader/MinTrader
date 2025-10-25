@@ -6,11 +6,15 @@ Handles all S3 operations for storing and retrieving reports, logs, and summarie
 
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 class S3ReportManager:
@@ -53,9 +57,9 @@ class S3ReportManager:
                             Bucket=self.bucket_name,
                             CreateBucketConfiguration={'LocationConstraint': self.region}
                         )
-                    print(f"Created S3 bucket: {self.bucket_name}")
+                    logger.info(f"Created S3 bucket: {self.bucket_name}")
                 except Exception as create_error:
-                    print(f"Warning: Could not create bucket: {create_error}")
+                    logger.warning(f"Could not create bucket: {create_error}")
     
     def upload_reports(self, ticker: str, date: str, reports_dir: Path) -> bool:
         """
@@ -72,7 +76,7 @@ class S3ReportManager:
         try:
             reports_path = Path(reports_dir)
             if not reports_path.exists():
-                print(f"Reports directory not found: {reports_dir}")
+                logger.warning(f"Reports directory not found: {reports_dir}")
                 return False
             
             # Upload all markdown files
@@ -94,11 +98,11 @@ class S3ReportManager:
                     s3_key
                 )
             
-            print(f"Uploaded reports for {ticker} on {date} to S3")
+            logger.info(f"Uploaded reports for {ticker} on {date} to S3")
             return True
             
         except Exception as e:
-            print(f"Error uploading reports: {e}")
+            logger.error(f"Error uploading reports: {e}")
             return False
     
     def upload_log(self, iteration_id: str, log_path: Path) -> bool:
@@ -114,7 +118,7 @@ class S3ReportManager:
         """
         try:
             if not Path(log_path).exists():
-                print(f"Log file not found: {log_path}")
+                logger.warning(f"Log file not found: {log_path}")
                 return False
             
             s3_key = f"logs/{iteration_id}/message_tool.log"
@@ -124,7 +128,7 @@ class S3ReportManager:
                 s3_key
             )
             
-            print(f"Uploaded log for iteration {iteration_id} to S3")
+            logger.info(f"Uploaded log for iteration {iteration_id} to S3")
             return True
             
         except Exception as e:
@@ -151,7 +155,7 @@ class S3ReportManager:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
                 return None
-            print(f"Error retrieving last summary: {e}")
+            logger.error(f"Error retrieving last summary: {e}")
             return None
     
     def save_summary(self, summary: str, iteration_id: str) -> bool:
@@ -182,11 +186,11 @@ class S3ReportManager:
                 Body=summary.encode('utf-8')
             )
             
-            print(f"Saved summary for iteration {iteration_id} to S3")
+            logger.info(f"Saved summary for iteration {iteration_id} to S3")
             return True
             
         except Exception as e:
-            print(f"Error saving summary: {e}")
+            logger.error(f"Error saving summary: {e}")
             return False
     
     def get_position_history(self) -> Dict[str, str]:
@@ -209,7 +213,7 @@ class S3ReportManager:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
                 return {}
-            print(f"Error retrieving position history: {e}")
+            logger.error(f"Error retrieving position history: {e}")
             return {}
     
     def save_position_history(self, history: Dict[str, str]) -> bool:
@@ -232,7 +236,7 @@ class S3ReportManager:
             return True
             
         except Exception as e:
-            print(f"Error saving position history: {e}")
+            logger.error(f"Error saving position history: {e}")
             return False
     
     def list_reports(self, ticker: Optional[str] = None) -> List[str]:
@@ -258,7 +262,7 @@ class S3ReportManager:
             return [obj['Key'] for obj in response['Contents']]
             
         except Exception as e:
-            print(f"Error listing reports: {e}")
+            logger.error(f"Error listing reports: {e}")
             return []
     
     def get_analyzed_stocks_history(self, days_threshold: int = 14) -> Dict[str, List[str]]:
@@ -329,7 +333,7 @@ class S3ReportManager:
             return stock_history
             
         except Exception as e:
-            print(f"Error fetching analyzed stocks history from S3: {e}")
+            logger.error(f"Error fetching analyzed stocks history from S3: {e}")
             return {}
     
     def get_report_from_s3(self, ticker: str, report_type: str, date: Optional[str] = None) -> Optional[str]:
@@ -367,7 +371,7 @@ class S3ReportManager:
                                 continue
                 
                 if not date_folders:
-                    print(f"No analysis reports found for {ticker}")
+                    logger.info(f"No analysis reports found for {ticker}")
                     return None
                 
                 # Get the most recent date
@@ -386,12 +390,12 @@ class S3ReportManager:
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
-                print(f"Report '{report_type}' not found for {ticker} on {date}")
+                logger.info(f"Report '{report_type}' not found for {ticker} on {date}")
                 return None
-            print(f"Error retrieving report for {ticker}: {e}")
+            logger.error(f"Error retrieving report for {ticker}: {e}")
             return None
         except Exception as e:
-            print(f"Error retrieving report for {ticker}: {e}")
+            logger.error(f"Error retrieving report for {ticker}: {e}")
             return None
     
     def get_stock_analysis_decision(self, ticker: str, date: str) -> str:
@@ -434,17 +438,17 @@ class S3ReportManager:
                 return "HOLD"
             else:
                 # Log the beginning of content for debugging
-                print(f"Could not determine decision for {ticker} on {date}. Content preview: {content[:200]}...")
+                logger.debug(f"Could not determine decision for {ticker} on {date}. Content preview: {content[:200]}...")
                 return "UNKNOWN"
                 
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
-                print(f"Decision file not found for {ticker} on {date}")
+                logger.debug(f"Decision file not found for {ticker} on {date}")
                 return "UNKNOWN"
-            print(f"Error retrieving decision for {ticker} on {date}: {e}")
+            logger.error(f"Error retrieving decision for {ticker} on {date}: {e}")
             return "UNKNOWN"
         except Exception as e:
-            print(f"Error retrieving decision for {ticker} on {date}: {e}")
+            logger.error(f"Error retrieving decision for {ticker} on {date}: {e}")
             return "UNKNOWN"
 

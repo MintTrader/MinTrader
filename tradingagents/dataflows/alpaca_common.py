@@ -1,9 +1,13 @@
 import os
+import logging
 import urllib3
 from datetime import datetime, timedelta
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.historical.news import NewsClient
 from alpaca.trading.client import TradingClient
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 # Disable SSL warnings globally
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -47,7 +51,7 @@ def get_trading_client() -> TradingClient:
     
     # Only print warning for live mode, not info for paper mode
     if not paper:
-        print("⚠️  WARNING: Running in LIVE trading mode! Set ALPACA_PAPER_MODE=true for paper trading.")
+        logger.warning("⚠️  WARNING: Running in LIVE trading mode! Set ALPACA_PAPER_MODE=true for paper trading.")
     
     # Create client with SSL verification disabled
     client = TradingClient(

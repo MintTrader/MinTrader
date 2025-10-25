@@ -20,6 +20,7 @@ from .nodes import (
     analyze_stocks_node,
     make_decisions_node,
     execute_trades_node,
+    upload_results_to_s3_node,
     should_analyze_stocks,
     should_execute_trades
 )
@@ -30,7 +31,7 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     Create and compile the portfolio management graph.
     
     Workflow:
-    1. START → assess_portfolio: Get current portfolio state
+    1. START → assess_portfolio: Get current portfolio state + fetch recently analyzed from S3
     2. assess_portfolio → select_stocks: Research market & select stocks (unified)
     3. select_stocks → [conditional]:
        - If stocks selected → analyze_stocks
@@ -38,8 +39,9 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     4. analyze_stocks → make_decisions: LLM decides on trades
     5. make_decisions → [conditional]:
        - If trades pending → execute_trades
-       - If no trades → END
-    6. execute_trades → END
+       - If no trades → upload_to_s3
+    6. execute_trades → upload_to_s3: Upload results, summary, and logs to S3
+    7. upload_to_s3 → END
     
     Args:
         config: Portfolio configuration dict
@@ -68,6 +70,7 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     workflow.add_node("analyze_stocks", analyze_stocks_node)
     workflow.add_node("make_decisions", make_decisions_node)
     workflow.add_node("execute_trades", execute_trades_node)
+    workflow.add_node("upload_to_s3", upload_results_to_s3_node)
     
     # Define edges
     # START → assess portfolio
@@ -89,18 +92,21 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     # analyze → decide
     workflow.add_edge("analyze_stocks", "make_decisions")
     
-    # decide → [conditional: execute or end]
+    # decide → [conditional: execute or upload]
     workflow.add_conditional_edges(
         "make_decisions",
         should_execute_trades,
         {
             "execute": "execute_trades",
-            "complete": END
+            "complete": "upload_to_s3"
         }
     )
     
-    # execute → end
-    workflow.add_edge("execute_trades", END)
+    # execute → upload
+    workflow.add_edge("execute_trades", "upload_to_s3")
+    
+    # upload → end
+    workflow.add_edge("upload_to_s3", END)
     
     # Compile with optional checkpointing
     if enable_checkpointing:

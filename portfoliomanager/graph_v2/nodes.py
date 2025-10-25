@@ -13,6 +13,7 @@ Nodes are:
 - Automatically checkpointed by LangGraph
 """
 
+import logging
 from typing import Dict, Any
 from datetime import datetime
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -22,6 +23,10 @@ from langgraph.pregel import Pregel
 from .state import PortfolioState
 from .mcp_adapter import get_alpaca_mcp_tools
 from shared.llm_factory import get_agent_llm, get_quick_llm
+from portfoliomanager.dataflows.s3_client import S3ReportManager
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 # ==================== Portfolio Assessment ====================
@@ -33,12 +38,58 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
     The agent autonomously calls the necessary tools to gather portfolio information.
     This is the first node in the workflow - it establishes the baseline state.
     
+    Also fetches recently analyzed stocks from S3 to avoid redundant analysis.
+    
     Returns:
-        State updates with portfolio snapshot
+        State updates with portfolio snapshot and recently analyzed stocks
     """
-    print("\n📊 [ASSESS] Gathering portfolio information...")
+    logger.info("📊 [ASSESS] Gathering portfolio information...")
     
     try:
+        # Fetch recently analyzed stocks from S3
+        recently_analyzed_data = {}
+        try:
+            config = state.get("config", {})
+            s3_bucket = config.get("s3_bucket_name")
+            s3_region = config.get("s3_region", "us-east-1")
+            
+            if s3_bucket:
+                logger.info("📦 Fetching recently analyzed stocks from S3...")
+                s3_manager = S3ReportManager(s3_bucket, s3_region)
+                
+                # Get stocks analyzed in the last 3 days
+                stock_history = s3_manager.get_analyzed_stocks_history(days_threshold=14)
+                
+                # Format for state
+                recently_analyzed_list = []
+                for ticker, dates in stock_history.items():
+                    if dates:
+                        # Calculate days ago for most recent analysis
+                        most_recent_date = dates[0]
+                        try:
+                            analysis_date = datetime.strptime(most_recent_date, "%Y-%m-%d")
+                            days_ago = (datetime.now() - analysis_date).days
+                            recently_analyzed_list.append({
+                                "ticker": ticker,
+                                "date": most_recent_date,
+                                "days_ago": days_ago
+                            })
+                        except ValueError:
+                            continue
+                
+                recently_analyzed_data = {
+                    "recently_analyzed": recently_analyzed_list,
+                    "total_count": len(recently_analyzed_list)
+                }
+                
+                logger.info(f"📦 Found {len(recently_analyzed_list)} recently analyzed stocks in S3")
+            else:
+                logger.info("ℹ️  S3 not configured, skipping recently analyzed fetch")
+                
+        except Exception as e:
+            logger.warning(f"Could not fetch recently analyzed stocks from S3: {e}")
+            recently_analyzed_data = {}
+        
         all_tools = get_alpaca_mcp_tools()
         
         # Filter to only the assessment tools we want to force
@@ -51,7 +102,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
         
         assessment_tools = [t for t in all_tools if t.name in required_tool_names]
         
-        print(f"📋 Using {len(assessment_tools)}/{len(all_tools)} assessment tools: {[t.name for t in assessment_tools]}")
+        logger.info(f"📋 Using {len(assessment_tools)}/{len(all_tools)} assessment tools: {[t.name for t in assessment_tools]}")
         
         # Create agent with ONLY the assessment tools
         # This forces the agent to use these tools (it has no other options)
@@ -82,15 +133,15 @@ IMPORTANT: Call all 4 tools at once in your first response, don't wait for resul
                 if hasattr(last_msg, 'type'):
                     if last_msg.type == 'ai':
                         if last_msg.content:
-                            print(f"🤖 {last_msg.content}")
+                            logger.info(f"🤖 {last_msg.content}")
                             portfolio_summary = last_msg.content
                         # Show tool calls
                         if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
                             for tc in last_msg.tool_calls:
-                                print(f"🔧 {tc.get('name', 'unknown')}({tc.get('args', {})})")
+                                logger.debug(f"🔧 {tc.get('name', 'unknown')}({tc.get('args', {})})")
                     elif last_msg.type == 'tool':
                         # Show full tool result (no truncation)
-                        print(f"✅ {last_msg.name}:\n{last_msg.content}")
+                        logger.debug(f"✅ {last_msg.name}:\n{last_msg.content}")
         
         # Extract structured data from tool responses
         account_info = {}
@@ -159,12 +210,13 @@ IMPORTANT: Call all 4 tools at once in your first response, don't wait for resul
             "phase": "assess",
             "last_summary": portfolio_summary or "Portfolio assessed",
             "account": account_info,
-            "positions": positions
+            "positions": positions,
+            "recently_analyzed": recently_analyzed_data
         }
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error assessing portfolio: {e}")
+        logger.error(f"❌ Error assessing portfolio: {e}", exc_info=True)
         return {
             "phase": "error",
             "error": str(e)
@@ -190,7 +242,7 @@ def select_stocks_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with selected stocks
     """
-    print("\n🎯 [SELECT] Selecting stocks for analysis...")
+    logger.info("🎯 [SELECT] Selecting stocks for analysis...")
     
     try:
         config = state.get("config", {})
@@ -198,7 +250,7 @@ def select_stocks_node(state: PortfolioState) -> Dict[str, Any]:
         
         # Check if stock selection is enabled
         if not config.get("enable_stock_selection", True):
-            print("ℹ️  Stock selection disabled, no stocks selected")
+            logger.info("ℹ️  Stock selection disabled, no stocks selected")
             return {
                 "stocks_to_analyze": []
             }
@@ -258,7 +310,7 @@ Required JSON structure:
 4. Use only well-known ticker symbols (e.g., AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD, etc.)
 """
         
-        print(f"🔎 Selecting stocks for analysis...")
+        logger.info("🔎 Selecting stocks for analysis...")
         
         response = llm.invoke([
             SystemMessage(content="""You are a portfolio manager. Recommend stocks for analysis.
@@ -304,26 +356,24 @@ Start your response with { and end with }. Do not wrap in ```json``` tags."""),
                     
                     if ticker and ticker not in stocks_to_exclude:
                         stocks.append(ticker)
-                        print(f"  • {ticker} ({sector}): {rationale}")
+                        logger.info(f"  • {ticker} ({sector}): {rationale}")
                         
                         # Show why it was selected
                         if any(p.get('symbol') == ticker for p in positions):
-                            print(f"    → Existing position review")
+                            logger.info(f"    → Existing position review")
                 
                 # Limit to max_analyses
                 stocks = stocks[:max_analyses]
                 
                 if stocks:
-                    print(f"\n🎯 Recommended Stocks ({len(stocks)})")
+                    logger.info(f"🎯 Recommended Stocks ({len(stocks)})")
                 
             except json.JSONDecodeError as e:
-                print(f"⚠️  Agent response is not valid JSON. Response:")
-                print(content)
-                print("\nNo stocks selected.")
+                logger.warning(f"⚠️  Agent response is not valid JSON. Response: {content}")
+                logger.warning("No stocks selected.")
         else:
-            print("⚠️  Agent response is not valid JSON. Response:")
-            print(content)
-            print("\nNo stocks selected.")
+            logger.warning(f"⚠️  Agent response is not valid JSON. Response: {content}")
+            logger.warning("No stocks selected.")
         
         return {
             "stocks_to_analyze": stocks
@@ -332,7 +382,7 @@ Start your response with { and end with }. Do not wrap in ```json``` tags."""),
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error in stock selection: {e}")
+        logger.error(f"❌ Error in stock selection: {e}", exc_info=True)
         return {
             "stocks_to_analyze": []
         }
@@ -350,12 +400,12 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with analysis results
     """
-    print("\n📊 [ANALYZE] Running stock analysis...")
+    logger.info("📊 [ANALYZE] Running stock analysis...")
     
     stocks = state.get("stocks_to_analyze", [])
     
     if not stocks:
-        print("ℹ️  No stocks selected for analysis")
+        logger.info("ℹ️  No stocks selected for analysis")
         return {
             "analysis_results": {},
             "phase": "analyze"
@@ -378,8 +428,9 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
         trade_date = datetime.now()
         
         for ticker in stocks:
-            print(f"  📈 Analyzing {ticker}...")
+            logger.info(f"  📈 Analyzing {ticker}...")
             
+            # TradingAgentsGraph.propagate() will log its own progress
             final_state, processed_signal = trading_agents.propagate(ticker, trade_date)
             
             results[ticker] = {
@@ -390,9 +441,9 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
                 "date": str(trade_date.date())
             }
             
-            print(f"  ✅ {ticker}: {processed_signal}")
+            logger.info(f"  ✅ {ticker}: {processed_signal}")
         
-        print(f"✅ Analyzed {len(results)} stocks")
+        logger.info(f"✅ Analyzed {len(results)} stocks")
         
         return {
             "analysis_results": results,
@@ -400,7 +451,7 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        print(f"❌ Error analyzing stocks: {e}")
+        logger.error(f"❌ Error analyzing stocks: {e}", exc_info=True)
         return {
             "analysis_results": {},
             "phase": "analyze",
@@ -423,7 +474,7 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with pending trades
     """
-    print("\n💭 [DECIDE] Making trading decisions...")
+    logger.info("💭 [DECIDE] Making trading decisions...")
     
     try:
         config = state.get("config", {})
@@ -434,7 +485,7 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
         analysis_results = state.get("analysis_results", {})
         
         if not analysis_results:
-            print("ℹ️  No analysis results to decide on")
+            logger.info("ℹ️  No analysis results to decide on")
             return {
                 "pending_trades": [],
                 "phase": "decide"
@@ -495,7 +546,7 @@ Or [] if no trades warranted.
         if start >= 0 and end > start:
             trades = json.loads(content[start:end])
             
-            print(f"✅ Generated {len(trades)} trading decisions:")
+            logger.info(f"✅ Generated {len(trades)} trading decisions:")
             for trade in trades:
                 action = trade.get("action")
                 ticker = trade.get("ticker")
@@ -503,25 +554,25 @@ Or [] if no trades warranted.
                 value = trade.get("order_value", 0)
                 
                 if action == "BUY":
-                    print(f"  📈 BUY {ticker}: ${value:,.2f}")
+                    logger.info(f"  📈 BUY {ticker}: ${value:,.2f}")
                 elif action == "SELL":
-                    print(f"  📉 SELL {ticker}: {qty} shares")
+                    logger.info(f"  📉 SELL {ticker}: {qty} shares")
                 else:
-                    print(f"  ⏸️  HOLD {ticker}")
+                    logger.info(f"  ⏸️  HOLD {ticker}")
             
             return {
                 "pending_trades": trades,
                 "phase": "decide"
             }
         else:
-            print("ℹ️  No trades generated")
+            logger.info("ℹ️  No trades generated")
             return {
                 "pending_trades": [],
                 "phase": "decide"
             }
             
     except Exception as e:
-        print(f"❌ Error making decisions: {e}")
+        logger.error(f"❌ Error making decisions: {e}", exc_info=True)
         return {
             "pending_trades": [],
             "phase": "decide",
@@ -541,12 +592,12 @@ def execute_trades_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with executed trades
     """
-    print("\n⚡ [EXECUTE] Executing trades...")
+    logger.info("⚡ [EXECUTE] Executing trades...")
     
     pending_trades = state.get("pending_trades", [])
     
     if not pending_trades:
-        print("ℹ️  No trades to execute")
+        logger.info("ℹ️  No trades to execute")
         return {
             "executed_trades": [],
             "phase": "execute"
@@ -588,17 +639,17 @@ Execute each trade and report the order IDs."""
                 if hasattr(last_msg, 'type'):
                     if last_msg.type == 'ai':
                         if last_msg.content:
-                            print(f"🤖 {last_msg.content}")
+                            logger.info(f"🤖 {last_msg.content}")
                         # Show tool calls
                         if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
                             for tc in last_msg.tool_calls:
                                 args = tc.get('args', {})
                                 # Format trade details nicely
                                 arg_str = ", ".join([f"{k}={v}" for k, v in args.items()])
-                                print(f"🔧 {tc.get('name', 'unknown')}({arg_str})")
+                                logger.info(f"🔧 {tc.get('name', 'unknown')}({arg_str})")
                     elif last_msg.type == 'tool':
                         # Show full tool result (no truncation)
-                        print(f"✅ {last_msg.name}:\n{last_msg.content}")
+                        logger.debug(f"✅ {last_msg.name}:\n{last_msg.content}")
         
         # Mark all as submitted (agent handled execution)
         executed = [
@@ -618,7 +669,7 @@ Execute each trade and report the order IDs."""
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error executing trades: {e}")
+        logger.error(f"❌ Error executing trades: {e}", exc_info=True)
         return {
             "executed_trades": [],
             "phase": "execute",
@@ -656,4 +707,127 @@ def should_execute_trades(state: PortfolioState) -> str:
         return "execute"
     else:
         return "complete"
+
+
+# ==================== S3 Upload ====================
+
+def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
+    """
+    Upload all analysis results, summary, and logs to S3.
+    
+    This node runs at the end of the workflow to persist:
+    - Analysis results for each stock (in results dir structure)
+    - Iteration summary
+    - Execution logs (if available)
+    
+    Returns:
+        State updates with upload status
+    """
+    logger.info("📦 [UPLOAD] Uploading results to S3...")
+    
+    try:
+        config = state.get("config", {})
+        s3_bucket = config.get("s3_bucket_name")
+        s3_region = config.get("s3_region", "us-east-1")
+        
+        if not s3_bucket:
+            logger.info("ℹ️  S3 not configured, skipping upload")
+            return {"phase": "complete"}
+        
+        s3_manager = S3ReportManager(s3_bucket, s3_region)
+        iteration_id = state.get("iteration_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        analysis_results = state.get("analysis_results", {})
+        
+        # Upload analysis results for each analyzed stock
+        from pathlib import Path
+        results_dir = Path(config.get("analysis_config", {}).get("results_dir", "./results"))
+        upload_count = 0
+        
+        for ticker, result in analysis_results.items():
+            try:
+                analysis_date = result.get("date", datetime.now().strftime("%Y-%m-%d"))
+                
+                # Check if reports exist for this ticker
+                ticker_dir = results_dir / ticker / "TradingAgentsStrategy_logs"
+                if ticker_dir.exists():
+                    # Upload reports
+                    success = s3_manager.upload_reports(
+                        ticker=ticker,
+                        date=analysis_date,
+                        reports_dir=ticker_dir
+                    )
+                    if success:
+                        upload_count += 1
+                        logger.info(f"  ✅ Uploaded {ticker} analysis to S3")
+                    else:
+                        logger.warning(f"  ⚠️  Could not upload {ticker} analysis")
+                else:
+                    logger.debug(f"  ℹ️  No reports directory found for {ticker}")
+                    
+            except Exception as e:
+                logger.error(f"  ❌ Error uploading {ticker} results: {e}")
+        
+        logger.info(f"📦 Uploaded {upload_count}/{len(analysis_results)} stock analyses to S3")
+        
+        # Create and upload iteration summary
+        try:
+            summary_lines = [
+                f"Portfolio Manager Iteration: {iteration_id}",
+                f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"",
+                f"Account Status:",
+                f"  Cash: ${state.get('account', {}).get('cash', 0):,.2f}",
+                f"  Portfolio Value: ${state.get('account', {}).get('portfolio_value', 0):,.2f}",
+                f"  Positions: {len(state.get('positions', []))}",
+                f"",
+                f"Analysis:",
+                f"  Stocks Analyzed: {len(analysis_results)}",
+                f"  Stocks: {', '.join(analysis_results.keys()) if analysis_results else 'None'}",
+                f"",
+                f"Trading:",
+                f"  Decisions Made: {len(state.get('pending_trades', []))}",
+                f"  Trades Executed: {len(state.get('executed_trades', []))}",
+            ]
+            
+            if state.get('executed_trades'):
+                summary_lines.append(f"")
+                summary_lines.append(f"Executed Trades:")
+                for trade in state.get('executed_trades', []):
+                    action = trade.get('action', 'UNKNOWN')
+                    ticker = trade.get('ticker', 'UNKNOWN')
+                    qty = trade.get('quantity', 0)
+                    summary_lines.append(f"  - {action} {qty} shares of {ticker}")
+            
+            summary = "\n".join(summary_lines)
+            
+            s3_manager.save_summary(summary, iteration_id)
+            logger.info("📦 Uploaded iteration summary to S3")
+            
+        except Exception as e:
+            logger.error(f"Could not upload summary to S3: {e}")
+        
+        # Upload logs if they exist
+        try:
+            log_dir = results_dir / "portfolio_manager" / iteration_id
+            if log_dir.exists():
+                log_file = log_dir / "message_tool.log"
+                if log_file.exists():
+                    s3_manager.upload_log(iteration_id, log_file)
+                    logger.info("📦 Uploaded logs to S3")
+            else:
+                logger.debug("ℹ️  No logs directory found")
+                
+        except Exception as e:
+            logger.error(f"Could not upload logs to S3: {e}")
+        
+        return {
+            "phase": "complete"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error uploading to S3: {e}", exc_info=True)
+        return {
+            "phase": "complete",
+            "error": f"S3 upload error: {str(e)}"
+        }
 

@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta
+import logging
 import pandas as pd
 from io import StringIO
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from .alpaca_common import get_data_client, validate_alpaca_date
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 def get_stock(
@@ -92,7 +96,7 @@ def get_stock(
         return csv_string
         
     except Exception as e:
-        print(f"Error fetching stock data from Alpaca for {symbol}: {e}")
+        logger.error(f"Error fetching stock data from Alpaca for {symbol}: {e}")
         # Re-raise exception so fallback mechanism can try next vendor
         raise
 

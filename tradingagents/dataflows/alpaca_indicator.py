@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta
 import os
+import logging
 import pandas as pd
 import numpy as np
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from .alpaca_common import get_data_client, validate_alpaca_date
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 # Debug logging control
 DEBUG_LOGGING = os.getenv('TRADINGAGENTS_DEBUG_LOGGING', 'false').lower() in ('true', '1', 'yes')
@@ -100,13 +104,13 @@ def get_indicator(
         bars = client.get_stock_bars(request_params)
         
         if DEBUG_LOGGING:
-            print(f"DEBUG INDICATOR: Type of bars: {type(bars)}")
-            print(f"DEBUG INDICATOR: hasattr data: {hasattr(bars, 'data')}")
+            logger.debug(f"INDICATOR: Type of bars: {type(bars)}")
+            logger.debug(f"INDICATOR: hasattr data: {hasattr(bars, 'data')}")
             if hasattr(bars, 'data'):
-                print(f"DEBUG INDICATOR: symbol in bars.data: {symbol in bars.data}")
-                print(f"DEBUG INDICATOR: bars.data keys: {list(bars.data.keys())}")
+                logger.debug(f"INDICATOR: symbol in bars.data: {symbol in bars.data}")
+                logger.debug(f"INDICATOR: bars.data keys: {list(bars.data.keys())}")
                 if symbol in bars.data:
-                    print(f"DEBUG INDICATOR: bars.data[{symbol}] length: {len(bars.data[symbol])}")
+                    logger.debug(f"INDICATOR: bars.data[{symbol}] length: {len(bars.data[symbol])}")
         
         # Convert to DataFrame
         # Check if data exists in the .data attribute (same as stock file)
@@ -118,7 +122,7 @@ def get_indicator(
             else:
                 # Manually convert list of bars to DataFrame
                 if DEBUG_LOGGING:
-                    print(f"DEBUG INDICATOR: bar_data is a list, converting manually")
+                    logger.debug(f"INDICATOR: bar_data is a list, converting manually")
                 df = pd.DataFrame([vars(bar) for bar in bar_data])
                 if 'timestamp' not in df.columns:
                     df = df.reset_index()
@@ -208,7 +212,7 @@ def get_indicator(
         return result_str
         
     except Exception as e:
-        print(f"Error calculating indicator {indicator} from Alpaca for {symbol}: {e}")
+        logger.error(f"Error calculating indicator {indicator} from Alpaca for {symbol}: {e}")
         # Re-raise exception so fallback mechanism can try next vendor
         raise
 

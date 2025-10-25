@@ -131,11 +131,15 @@ if __name__ == "__main__":
     try:
         recommendations = matcher.get_memories(current_situation, n_matches=2)
 
+        import logging
+        logger = logging.getLogger(__name__)
         for i, rec in enumerate(recommendations, 1):
-            print(f"\nMatch {i}:")
-            print(f"Similarity Score: {rec['similarity_score']:.2f}")
-            print(f"Matched Situation: {rec['matched_situation']}")
-            print(f"Recommendation: {rec['recommendation']}")
+            logger.debug(f"\nMatch {i}:")
+            logger.debug(f"Similarity Score: {rec['similarity_score']:.2f}")
+            logger.debug(f"Matched Situation: {rec['matched_situation']}")
+            logger.debug(f"Recommendation: {rec['recommendation']}")
 
     except Exception as e:
-        print(f"Error during recommendation: {str(e)}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Error during recommendation: {str(e)}")

@@ -29,16 +29,25 @@ async def _init_alpaca_toolkit_async():
     
     # Initialize MCP client with Alpaca server
     # Use the alpaca-mcp-server command installed by the package
+    # Suppress MCP server logs by setting log level to ERROR
+    import os
+    env_config = {
+        "ALPACA_API_KEY": api_key,
+        "ALPACA_SECRET_KEY": secret_key,
+        "ALPACA_PAPER_TRADE": paper_trade,
+        # Suppress MCP server logs
+        "MCP_LOG_LEVEL": "ERROR",
+        "PYTHONUNBUFFERED": "1",  # Ensure logs flush immediately
+    }
+    # Copy current environment and update with our config
+    env_config.update(os.environ.copy())
+    
     client = MultiServerMCPClient({
         "alpaca": {
             "command": "alpaca-mcp-server",
             "args": ["serve"],
             "transport": "stdio",
-            "env": {
-                "ALPACA_API_KEY": api_key,
-                "ALPACA_SECRET_KEY": secret_key,
-                "ALPACA_PAPER_TRADE": paper_trade,
-            }
+            "env": env_config
         }
     })
     

@@ -1,5 +1,9 @@
 from typing import Annotated, Optional
 import os
+import logging
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 # Import from vendor-specific modules
 from .local import get_YFin_data, get_finnhub_news, get_finnhub_company_insider_sentiment, get_finnhub_company_insider_transactions, get_simfin_balance_sheet, get_simfin_cashflow, get_simfin_income_statements, get_reddit_global_news, get_reddit_company_news
@@ -13,7 +17,8 @@ from .alpaca_news import get_news as get_alpaca_news
 # Configuration and routing logic
 from .config import get_config
 
-# Debug logging control - can be disabled by setting env var
+# Debug logging control - controlled by Python logging level now
+# Legacy flag kept for backward compatibility but uses logger.debug() instead
 DEBUG_LOGGING = os.getenv('TRADINGAGENTS_DEBUG_LOGGING', 'false').lower() in ('true', '1', 'yes')
 
 # Tools organized by category
@@ -155,7 +160,7 @@ def route_to_vendor(method: str, *args, **kwargs):
     if DEBUG_LOGGING:
         primary_str = " → ".join(primary_vendors)
         fallback_str = " → ".join(fallback_vendors)
-        print(f"DEBUG: {method} - Primary: [{primary_str}] | Full fallback order: [{fallback_str}]")
+        logger.debug(f"{method} - Primary: [{primary_str}] | Full fallback order: [{fallback_str}]")
 
     # Track results and execution state
     results = []
@@ -166,7 +171,7 @@ def route_to_vendor(method: str, *args, **kwargs):
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
             if vendor in primary_vendors and DEBUG_LOGGING:
-                print(f"INFO: Vendor '{vendor}' not supported for method '{method}', falling back to next vendor")
+                logger.debug(f"Vendor '{vendor}' not supported for method '{method}', falling back to next vendor")
             continue
 
         vendor_impl = VENDOR_METHODS[method][vendor]
@@ -180,13 +185,13 @@ def route_to_vendor(method: str, *args, **kwargs):
         # Debug: Print current attempt (only if debug enabled)
         if DEBUG_LOGGING:
             vendor_type = "PRIMARY" if is_primary_vendor else "FALLBACK"
-            print(f"DEBUG: Attempting {vendor_type} vendor '{vendor}' for {method} (attempt #{vendor_attempt_count})")
+            logger.debug(f"Attempting {vendor_type} vendor '{vendor}' for {method} (attempt #{vendor_attempt_count})")
 
         # Handle list of methods for a vendor
         if isinstance(vendor_impl, list):
             vendor_methods = [(impl, vendor) for impl in vendor_impl]
             if DEBUG_LOGGING:
-                print(f"DEBUG: Vendor '{vendor}' has multiple implementations: {len(vendor_methods)} functions")
+                logger.debug(f"Vendor '{vendor}' has multiple implementations: {len(vendor_methods)} functions")
         else:
             vendor_methods = [(vendor_impl, vendor)]
 
@@ -195,16 +200,15 @@ def route_to_vendor(method: str, *args, **kwargs):
         for impl_func, vendor_name in vendor_methods:
             try:
                 if DEBUG_LOGGING:
-                    print(f"DEBUG: Calling {impl_func.__name__} from vendor '{vendor_name}'...")
-                result = impl_func(*args, **kwargs)
+                    logger.debug(f"Calling {impl_func.__name__} from vendor '{vendor_name}'...")                result = impl_func(*args, **kwargs)
                 vendor_results.append(result)
                 if DEBUG_LOGGING:
-                    print(f"SUCCESS: {impl_func.__name__} from vendor '{vendor_name}' completed successfully")
+                    logger.debug(f"SUCCESS: {impl_func.__name__} from vendor '{vendor_name}' completed successfully")
                     
             except Exception as e:
                 # Log error but continue with other implementations (only if debug or error is critical)
                 if DEBUG_LOGGING:
-                    print(f"FAILED: {impl_func.__name__} from vendor '{vendor_name}' failed: {e}")
+                    logger.debug(f"FAILED: {impl_func.__name__} from vendor '{vendor_name}' failed: {e}")
                 continue
 
         # Add this vendor's results
@@ -213,25 +217,25 @@ def route_to_vendor(method: str, *args, **kwargs):
             successful_vendor = vendor
             if DEBUG_LOGGING:
                 result_summary = f"Got {len(vendor_results)} result(s)"
-                print(f"SUCCESS: Vendor '{vendor}' succeeded - {result_summary}")
+                logger.debug(f"SUCCESS: Vendor '{vendor}' succeeded - {result_summary}")
             
             # Stopping logic: Stop after first successful vendor for single-vendor configs
             # Multiple vendor configs (comma-separated) may want to collect from multiple sources
             if len(primary_vendors) == 1:
                 if DEBUG_LOGGING:
-                    print(f"DEBUG: Stopping after successful vendor '{vendor}' (single-vendor config)")
+                    logger.debug(f"Stopping after successful vendor '{vendor}' (single-vendor config)")
                 break
         else:
             if DEBUG_LOGGING:
-                print(f"FAILED: Vendor '{vendor}' produced no results")
+                logger.debug(f"FAILED: Vendor '{vendor}' produced no results")
 
     # Final result summary
     if not results:
         # Always print failures
-        print(f"FAILURE: All {vendor_attempt_count} vendor attempts failed for method '{method}'")
+        logger.warning(f"All {vendor_attempt_count} vendor attempts failed for method '{method}'")
         raise RuntimeError(f"All vendor implementations failed for method '{method}'")
     elif DEBUG_LOGGING:
-        print(f"FINAL: Method '{method}' completed with {len(results)} result(s) from {vendor_attempt_count} vendor attempt(s)")
+        logger.debug(f"Method '{method}' completed with {len(results)} result(s) from {vendor_attempt_count} vendor attempt(s)")
 
     # Return single result if only one, otherwise concatenate as string
     if len(results) == 1:

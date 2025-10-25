@@ -9,6 +9,7 @@ All trading operations use paper trading mode by default for safety.
 
 from typing import Dict, List, Optional
 import json
+import logging
 from alpaca.trading.requests import (
     MarketOrderRequest,
     LimitOrderRequest,
@@ -18,6 +19,9 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
 from .alpaca_common import get_trading_client, is_paper_mode
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 def get_account() -> Dict:
@@ -49,7 +53,7 @@ def get_account() -> Dict:
             "paper_trading": is_paper_mode()
         }
     except Exception as e:
-        print(f"Error fetching account info: {e}")
+        logger.error(f"Error fetching account info: {e}")
         return {"error": str(e)}
 
 
@@ -83,7 +87,7 @@ def get_positions() -> List[Dict]:
         
         return result
     except Exception as e:
-        print(f"Error fetching positions: {e}")
+        logger.error(f"Error fetching positions: {e}")
         return [{"error": str(e)}]
 
 
@@ -116,7 +120,7 @@ def get_position(symbol: str) -> Optional[Dict]:
             "change_today": float(position.change_today)
         }
     except Exception as e:
-        print(f"Error fetching position for {symbol}: {e}")
+        logger.error(f"Error fetching position for {symbol}: {e}")
         return None
 
 
@@ -140,7 +144,7 @@ def place_market_order(
     """
     try:
         if not is_paper_mode():
-            print("WARNING: Placing order in LIVE trading mode!")
+            logger.warning("⚠️  WARNING: Placing order in LIVE trading mode!")
         
         client = get_trading_client()
         
@@ -181,7 +185,7 @@ def place_market_order(
             "paper_trading": is_paper_mode()
         }
     except Exception as e:
-        print(f"Error placing market order for {symbol}: {e}")
+        logger.error(f"Error placing market order for {symbol}: {e}")
         return {"error": str(e)}
 
 
@@ -207,7 +211,7 @@ def place_limit_order(
     """
     try:
         if not is_paper_mode():
-            print("WARNING: Placing order in LIVE trading mode!")
+            logger.warning("⚠️  WARNING: Placing order in LIVE trading mode!")
         
         client = get_trading_client()
         
@@ -250,7 +254,7 @@ def place_limit_order(
             "paper_trading": is_paper_mode()
         }
     except Exception as e:
-        print(f"Error placing limit order for {symbol}: {e}")
+        logger.error(f"Error placing limit order for {symbol}: {e}")
         return {"error": str(e)}
 
 
@@ -293,7 +297,7 @@ def get_orders(status: str = "open") -> List[Dict]:
         
         return result
     except Exception as e:
-        print(f"Error fetching orders: {e}")
+        logger.error(f"Error fetching orders: {e}")
         return [{"error": str(e)}]
 
 
@@ -317,7 +321,7 @@ def cancel_order(order_id: str) -> Dict:
             "message": "Order cancelled successfully"
         }
     except Exception as e:
-        print(f"Error cancelling order {order_id}: {e}")
+        logger.error(f"Error cancelling order {order_id}: {e}")
         return {
             "success": False,
             "order_id": order_id,
@@ -342,7 +346,7 @@ def cancel_all_orders() -> Dict:
             "message": f"Cancelled {len(cancelled)} orders"
         }
     except Exception as e:
-        print(f"Error cancelling all orders: {e}")
+        logger.error(f"Error cancelling all orders: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -367,7 +371,7 @@ def get_market_clock() -> Dict:
             "next_close": str(clock.next_close)
         }
     except Exception as e:
-        print(f"Error fetching market clock: {e}")
+        logger.error(f"Error fetching market clock: {e}")
         return {
             "error": str(e),
             "is_open": False  # Default to closed on error
@@ -443,7 +447,7 @@ def replace_order(order_id: str, qty: Optional[float] = None,
             "message": "Order replaced successfully"
         }
     except Exception as e:
-        print(f"Error replacing order {order_id}: {e}")
+        logger.error(f"Error replacing order {order_id}: {e}")
         return {
             "success": False,
             "order_id": order_id,
