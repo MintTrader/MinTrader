@@ -16,6 +16,7 @@ Nodes are:
 import logging
 from typing import Dict, Any
 from datetime import datetime
+from pathlib import Path
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain.agents import create_agent
 from langgraph.pregel import Pregel
@@ -424,18 +425,53 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
         results = {}
         trade_date = datetime.now()
         
+        # Get results directory from config
+        results_base_dir = Path(analysis_config.get("results_dir", "./results"))
+        
         for ticker in stocks:
             logger.info(f"  📈 Analyzing {ticker}...")
             
             # TradingAgentsGraph.propagate() will log its own progress
             final_state, processed_signal = trading_agents.propagate(ticker, trade_date)
             
+            # Save markdown reports to date-based directory structure
+            # This matches what the CLI does: results/<ticker>/YYYY-MM-DD/reports/
+            analysis_date_str = str(trade_date.date())
+            ticker_date_dir = results_base_dir / ticker / analysis_date_str
+            reports_dir = ticker_date_dir / "reports"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save individual markdown reports
+            report_sections = {
+                "market_report": final_state.get("market_report", ""),
+                "sentiment_report": final_state.get("sentiment_report", ""),
+                "news_report": final_state.get("news_report", ""),
+                "fundamentals_report": final_state.get("fundamentals_report", ""),
+                "investment_plan": final_state.get("investment_plan", ""),
+                "trader_investment_plan": final_state.get("trader_investment_plan", ""),
+                "final_trade_decision": final_state.get("final_trade_decision", ""),
+            }
+            
+            for section_name, content in report_sections.items():
+                if content:
+                    report_file = reports_dir / f"{section_name}.md"
+                    with open(report_file, "w", encoding="utf-8") as f:
+                        f.write(content)
+            
+            # Generate HTML report
+            try:
+                from tradingagents.utils.report_generator import ReportGenerator
+                if ReportGenerator.generate_for_analysis(ticker_date_dir):
+                    logger.info(f"  📄 Generated HTML report for {ticker}")
+            except Exception as e:
+                logger.warning(f"  ⚠️  Could not generate HTML report for {ticker}: {e}")
+            
             results[ticker] = {
                 "final_trade_decision": final_state.get("final_trade_decision", ""),
                 "investment_plan": final_state.get("investment_plan", ""),
                 "market_report": final_state.get("market_report", ""),
                 "recommendation": processed_signal,
-                "date": str(trade_date.date())
+                "date": analysis_date_str
             }
             
             logger.info(f"  ✅ {ticker}: {processed_signal}")
@@ -754,7 +790,6 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
         analysis_results = state.get("analysis_results", {})
         
         # Upload analysis results for each analyzed stock
-        from pathlib import Path
         results_dir = Path(config.get("analysis_config", {}).get("results_dir", "./results"))
         upload_count = 0
         
@@ -764,32 +799,45 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
             try:
                 analysis_date = result.get("date", datetime.now().strftime("%Y-%m-%d"))
                 
-                # Check if reports exist for this ticker
-                ticker_dir = results_dir / ticker / "TradingAgentsStrategy_logs"
-                logger.info(f"  🔍 Checking for {ticker} reports at: {ticker_dir}")
+                # Look for reports in the standard directory structure:
+                # results/<ticker>/<date>/reports/ contains .md files
+                # results/<ticker>/<date>/index.html is the HTML report
+                reports_dir = results_dir / ticker / analysis_date / "reports"
                 
-                if ticker_dir.exists():
-                    # Count files in directory
-                    files = list(ticker_dir.glob('*.md'))
-                    logger.info(f"  📄 Found {len(files)} report files for {ticker}")
-                    
-                    # Upload reports
-                    success = s3_manager.upload_reports(
-                        ticker=ticker,
-                        date=analysis_date,
-                        reports_dir=ticker_dir
-                    )
-                    if success:
-                        upload_count += 1
-                        logger.info(f"  ✅ Uploaded {ticker} analysis to S3 (reports/{ticker}/{analysis_date}/)")
-                    else:
-                        logger.warning(f"  ⚠️  Could not upload {ticker} analysis")
+                if not reports_dir.exists():
+                    logger.warning(f"  ⚠️  Reports directory not found: {reports_dir}")
+                    # List what's available to help debug
+                    ticker_base_dir = results_dir / ticker
+                    if ticker_base_dir.exists():
+                        subdirs = [d.name for d in ticker_base_dir.iterdir() if d.is_dir()]
+                        logger.debug(f"  Available directories in {ticker_base_dir}: {subdirs}")
+                        date_dir = ticker_base_dir / analysis_date
+                        if date_dir.exists():
+                            date_contents = [f.name for f in date_dir.iterdir()]
+                            logger.debug(f"  Contents of {date_dir}: {date_contents}")
+                    continue
+                
+                # Count files in reports directory
+                md_files = list(reports_dir.glob('*.md'))
+                html_file = reports_dir.parent / 'index.html'
+                
+                logger.info(f"  🔍 Found {len(md_files)} markdown reports for {ticker}")
+                if html_file.exists():
+                    logger.info(f"  🔍 Found index.html for {ticker}")
+                
+                # Upload reports (this will upload .md files + index.html if it exists)
+                success = s3_manager.upload_reports(
+                    ticker=ticker,
+                    date=analysis_date,
+                    reports_dir=reports_dir
+                )
+                
+                if success:
+                    upload_count += 1
+                    files_uploaded = len(md_files) + (1 if html_file.exists() else 0)
+                    logger.info(f"  ✅ Uploaded {files_uploaded} files for {ticker} to S3 (reports/{ticker}/{analysis_date}/)")
                 else:
-                    logger.warning(f"  ⚠️  Reports directory not found: {ticker_dir}")
-                    # List what's in results_dir to help debug
-                    if results_dir.exists():
-                        subdirs = [d.name for d in results_dir.iterdir() if d.is_dir()]
-                        logger.debug(f"  Available directories in {results_dir}: {subdirs}")
+                    logger.warning(f"  ⚠️  Could not upload {ticker} analysis to S3")
                     
             except Exception as e:
                 logger.error(f"  ❌ Error uploading {ticker} results: {e}", exc_info=True)
