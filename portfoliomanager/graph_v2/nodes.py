@@ -488,6 +488,9 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
                 "phase": "decide"
             }
         
+        # Create a set of stocks we currently hold
+        held_tickers = {p.get('symbol') for p in positions}
+        
         # Build decision prompt
         prompt = f"""Review analysis results and decide on trades.
 
@@ -497,8 +500,8 @@ Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
 Reserve (5%): ${account.get('portfolio_value', 0) * 0.05:,.2f}
 Available for purchases: ${max(0, account.get('cash', 0) - account.get('portfolio_value', 0) * 0.05):,.2f}
 
-CURRENT POSITIONS:
-{chr(10).join([f"  - {p.get('symbol')}: {p.get('qty')} shares, ${p.get('market_value', 0):,.2f} ({(p.get('unrealized_plpc', 0) * 100):+.1f}%)" for p in positions])}
+CURRENT POSITIONS (stocks you can SELL):
+{chr(10).join([f"  - {p.get('symbol')}: {p.get('qty')} shares, ${p.get('market_value', 0):,.2f} ({(p.get('unrealized_plpc', 0) * 100):+.1f}%)" for p in positions]) if positions else "  (No positions - you can only BUY)"}
 
 ANALYSIS RESULTS:
 """
@@ -507,17 +510,20 @@ ANALYSIS RESULTS:
             prompt += f"\n{ticker}:\n"
             prompt += f"  Recommendation: {result.get('recommendation', 'UNKNOWN')}\n"
             prompt += f"  Decision: {result.get('final_trade_decision', '')}\n"
+            has_position = ticker in held_tickers
+            prompt += f"  Current Position: {'YES - can SELL' if has_position else 'NO - can only BUY'}\n"
         
         prompt += """
 TASK: For each analyzed stock, autonomously decide BUY, SELL, or HOLD based on analysis.
 
-RULES:
+CRITICAL RULES:
 1. Make autonomous decisions - no human approval needed
 2. Only BUY if you have sufficient cash (check available for purchases)
-3. Only SELL if you have a position
-4. Respect 5% cash reserve
-5. Max 10% per position
-6. Execute ALL recommended BUY/SELL decisions from analysis
+3. **ONLY SELL if you currently have a position in that stock** (see "Current Position" above)
+4. DO NOT suggest SELL for stocks you don't own
+5. Respect 5% cash reserve
+6. Max 10% per position
+7. Execute ALL recommended BUY/SELL decisions from analysis (if valid)
 
 Respond with JSON array of trades:
 [
@@ -543,22 +549,34 @@ Or [] if no trades warranted.
         if start >= 0 and end > start:
             trades = json.loads(content[start:end])
             
-            logger.info(f"✅ Generated {len(trades)} trading decisions:")
+            # Validate and filter trades
+            valid_trades = []
             for trade in trades:
-                action = trade.get("action")
+                action = trade.get("action", "").upper()
                 ticker = trade.get("ticker")
                 qty = trade.get("quantity", 0)
                 value = trade.get("order_value", 0)
                 
-                if action == "BUY":
-                    logger.info(f"  📈 BUY {ticker}: ${value:,.2f}")
-                elif action == "SELL":
+                # Validate SELL trades - must have position
+                if action == "SELL":
+                    if ticker not in held_tickers:
+                        logger.warning(f"  ⚠️  Ignoring SELL {ticker}: No position held")
+                        continue
                     logger.info(f"  📉 SELL {ticker}: {qty} shares")
-                else:
+                elif action == "BUY":
+                    logger.info(f"  📈 BUY {ticker}: ${value:,.2f}")
+                elif action == "HOLD":
                     logger.info(f"  ⏸️  HOLD {ticker}")
+                else:
+                    logger.warning(f"  ⚠️  Unknown action '{action}' for {ticker}, skipping")
+                    continue
+                
+                valid_trades.append(trade)
+            
+            logger.info(f"✅ Generated {len(valid_trades)} valid trading decisions (filtered {len(trades) - len(valid_trades)} invalid)")
             
             return {
-                "pending_trades": trades,
+                "pending_trades": valid_trades,
                 "phase": "decide"
             }
         else:
