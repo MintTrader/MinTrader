@@ -517,137 +517,239 @@ def analyze_stocks_node(state: PortfolioState) -> Dict[str, Any]:
 
 def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
     """
-    LLM makes trading decisions based on analysis results.
+    LLM makes trading decisions and executes operations using Alpaca MCP tools.
     
     This node:
     1. Reviews all analysis reports
     2. Considers portfolio state and constraints
-    3. Decides on BUY/SELL/HOLD for each stock
-    4. Generates pending trades for approval (if HITL enabled)
+    3. Uses OpenAI function calling with all available Alpaca MCP tools
+    4. Can perform web search and check current market conditions
+    5. Autonomously executes any operations to maximize profits and maintain balanced portfolio
     
     Returns:
-        State updates with pending trades
+        State updates with executed trades
     """
-    logger.info("💭 [DECIDE] Making trading decisions...")
+    logger.info("💭 [DECIDE & EXECUTE] Making trading decisions with full tool access...")
     
     try:
         config = state.get("config", {})
-        llm = get_quick_llm(config)
+        
+        # Get LLM with function calling capabilities
+        llm = get_agent_llm(config)
+        
+        # Get all Alpaca MCP tools
+        all_tools = get_alpaca_mcp_tools()
+        
+        # Bind tools to LLM for native OpenAI function calling
+        llm_with_tools = llm.bind_tools(all_tools)
         
         account = state.get("account", {})
         positions = state.get("positions", [])
         analysis_results = state.get("analysis_results", {})
         
-        if not analysis_results:
-            logger.info("ℹ️  No analysis results to decide on")
-            return {
-                "pending_trades": [],
-                "phase": "decide"
-            }
+        # Build comprehensive tool list for the prompt
+        tool_descriptions = []
+        for tool in all_tools:
+            tool_descriptions.append(f"  - {tool.name}: {tool.description}")
+        tools_text = "\n".join(tool_descriptions)
         
         # Create a set of stocks we currently hold
         held_tickers = {p.get('symbol') for p in positions}
         
-        # Build decision prompt
-        prompt = f"""Review analysis results and decide on trades.
+        # Build comprehensive decision prompt with tool access
+        prompt = f"""You are an autonomous portfolio manager with full access to trading operations via Alpaca MCP tools.
 
-ACCOUNT:
-Cash: ${account.get('cash', 0):,.2f}
-Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
-Reserve (5%): ${account.get('portfolio_value', 0) * 0.05:,.2f}
-Available for purchases: ${max(0, account.get('cash', 0) - account.get('portfolio_value', 0) * 0.05):,.2f}
+CURRENT PORTFOLIO STATE:
+======================
+💰 Cash Available: ${account.get('cash', 0):,.2f}
+📈 Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
+🏦 Cash Reserve (5%): ${account.get('portfolio_value', 0) * 0.05:,.2f}
+💵 Available for Purchases: ${max(0, account.get('cash', 0) - account.get('portfolio_value', 0) * 0.05):,.2f}
 
-CURRENT POSITIONS (stocks you can SELL):
-{chr(10).join([f"  - {p.get('symbol')}: {p.get('qty')} shares, ${p.get('market_value', 0):,.2f} ({(p.get('unrealized_plpc', 0) * 100):+.1f}%)" for p in positions]) if positions else "  (No positions - you can only BUY)"}
+CURRENT POSITIONS:
+{chr(10).join([f"  • {p.get('symbol')}: {p.get('qty')} shares @ ${p.get('current_price', 0):.2f}, Market Value: ${p.get('market_value', 0):,.2f}, P&L: {(p.get('unrealized_plpc', 0) * 100):+.1f}%" for p in positions]) if positions else "  (Empty portfolio)"}
 
-ANALYSIS RESULTS:
+ANALYSIS RESULTS FROM THIS ITERATION:
+{"=" * 40}
 """
         
         for ticker, result in analysis_results.items():
             prompt += f"\n{ticker}:\n"
             prompt += f"  Recommendation: {result.get('recommendation', 'UNKNOWN')}\n"
-            prompt += f"  Decision: {result.get('final_trade_decision', '')}\n"
+            prompt += f"  Decision Rationale:\n{result.get('final_trade_decision', 'N/A')}\n"
             has_position = ticker in held_tickers
-            prompt += f"  Current Position: {'YES - can SELL' if has_position else 'NO - can only BUY'}\n"
+            prompt += f"  Current Position: {'YES (can SELL)' if has_position else 'NO (can only BUY)'}\n"
         
-        prompt += """
-TASK: For each analyzed stock, autonomously decide BUY, SELL, or HOLD based on analysis.
+        prompt += f"""
 
-CRITICAL RULES:
-1. Make autonomous decisions - no human approval needed
-2. Only BUY if you have sufficient cash (check available for purchases)
-3. **ONLY SELL if you currently have a position in that stock** (see "Current Position" above)
-4. DO NOT suggest SELL for stocks you don't own
-5. Respect 5% cash reserve
-6. Max 10% per position
-7. Execute ALL recommended BUY/SELL decisions from analysis (if valid)
+AVAILABLE TOOLS:
+================
+You have access to ALL Alpaca MCP tools for trading operations:
 
-Respond with JSON array of trades:
-[
-  {"ticker": "AAPL", "action": "BUY", "quantity": 0, "reasoning": "...", "order_value": 5000},
-  {"ticker": "TSLA", "action": "SELL", "quantity": 10, "reasoning": "..."}
-]
+{tools_text}
 
-Or [] if no trades warranted.
-"""
+CAPABILITIES:
+=============
+✅ You can use ANY of the above tools to execute operations
+✅ You can check current market conditions using get_stock_quote, get_stock_bars, etc.
+✅ You can perform web searches (via your built-in search capabilities) to get latest market news
+✅ You can place market orders (place_stock_order)
+✅ You can close positions (close_position)
+✅ You can check orders (get_orders)
+✅ You can get real-time quotes and market data
+✅ You can cancel orders if needed (cancel_order_by_id, cancel_all_orders)
+
+YOUR MISSION:
+=============
+Maximize profits and maintain a well-balanced portfolio according to our strategy.
+
+STRATEGY GUIDELINES:
+====================
+1. 🎯 Diversification: Maintain balanced exposure across sectors
+2. 💰 Cash Reserve: Always keep 5% cash reserve (${account.get('portfolio_value', 0) * 0.05:,.2f})
+3. 📊 Position Sizing: Max 10% of portfolio per position (${account.get('portfolio_value', 0) * 0.10:,.2f})
+4. 📈 Follow Analysis: Strongly weight the analysis results from this iteration
+5. 🔍 Market Context: Check current market conditions if needed before making decisions
+6. ⚡ Execute Decisively: Don't just plan - actually execute the trades using the tools
+7. 🛡️ Risk Management: Only SELL positions we currently hold (see Current Positions above)
+8. 💡 Be Autonomous: Make decisions and execute them - no human approval needed
+
+DECISION PROCESS:
+=================
+1. Review the analysis results for each stock
+2. Consider current portfolio state and strategy guidelines
+3. Check current market conditions if you need more context (using get_stock_quote or get_market_clock)
+4. Decide on appropriate actions (BUY, SELL, HOLD) for each analyzed stock
+5. **EXECUTE the trades** using place_stock_order for BUYs, close_position for SELLs
+6. Verify execution by checking order status if needed
+
+IMPORTANT RULES:
+================
+• Only BUY if you have sufficient available cash
+• Only SELL positions you currently hold
+• Use market orders for simplicity: place_stock_order with side="buy"/"sell", type="market"
+• For BUY orders, use notional=<dollar_amount> instead of qty
+• For SELL orders, use close_position to close entire position or place_stock_order with qty=<shares>
+• Execute ALL recommended actions from analysis (if they meet constraints)
+• You can use web search to get the latest news/market context if helpful
+
+NOW: Review the analysis, consider market conditions, and EXECUTE the appropriate trading operations to maximize profits and maintain portfolio balance."""
         
-        response = llm.invoke([
-            SystemMessage(content="You are a portfolio manager making trading decisions."),
+        # Create messages list for conversation
+        messages = [
+            SystemMessage(content="You are an autonomous portfolio manager with full trading authority."),
             HumanMessage(content=prompt)
-        ])
+        ]
         
-        # Parse trades
-        import json
-        import re
-        content = str(response.content)
+        # Track executed trades
+        executed_trades = []
         
-        start = content.find('[')
-        end = content.rfind(']') + 1
-        if start >= 0 and end > start:
-            trades = json.loads(content[start:end])
+        # Iteratively call LLM with tools until it decides it's done
+        max_iterations = 10  # Prevent infinite loops
+        iteration = 0
+        
+        while iteration < max_iterations:
+            logger.info(f"🔄 Decision iteration {iteration + 1}/{max_iterations}")
             
-            # Validate and filter trades
-            valid_trades = []
-            for trade in trades:
-                action = trade.get("action", "").upper()
-                ticker = trade.get("ticker")
-                qty = trade.get("quantity", 0)
-                value = trade.get("order_value", 0)
+            # Invoke LLM with tools
+            response = llm_with_tools.invoke(messages)
+            
+            # Add AI response to messages
+            messages.append(response)
+            
+            # Check if LLM wants to call tools
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                logger.info(f"🔧 LLM requested {len(response.tool_calls)} tool call(s)")
                 
-                # Validate SELL trades - must have position
-                if action == "SELL":
-                    if ticker not in held_tickers:
-                        logger.warning(f"  ⚠️  Ignoring SELL {ticker}: No position held")
-                        continue
-                    logger.info(f"  📉 SELL {ticker}: {qty} shares")
-                elif action == "BUY":
-                    logger.info(f"  📈 BUY {ticker}: ${value:,.2f}")
-                elif action == "HOLD":
-                    logger.info(f"  ⏸️  HOLD {ticker}")
-                else:
-                    logger.warning(f"  ⚠️  Unknown action '{action}' for {ticker}, skipping")
-                    continue
+                # Execute each tool call
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.get('name', 'unknown')
+                    tool_args = tool_call.get('args', {})
+                    tool_id = tool_call.get('id', '')
+                    
+                    # Log the tool call
+                    args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items()])
+                    logger.info(f"  🔧 Calling: {tool_name}({args_str})")
+                    
+                    # Find and execute the tool
+                    matching_tools = [t for t in all_tools if t.name == tool_name]
+                    
+                    if matching_tools:
+                        tool = matching_tools[0]
+                        try:
+                            # Execute tool
+                            result = tool.invoke(tool_args)
+                            logger.info(f"  ✅ {tool_name} result: {str(result)[:200]}...")
+                            
+                            # Track trade executions
+                            if tool_name == 'place_stock_order':
+                                executed_trades.append({
+                                    'ticker': tool_args.get('symbol', 'UNKNOWN'),
+                                    'action': tool_args.get('side', 'UNKNOWN').upper(),
+                                    'quantity': tool_args.get('qty', 0),
+                                    'order_value': tool_args.get('notional', 0),
+                                    'order_type': tool_args.get('type', 'market'),
+                                    'status': 'submitted',
+                                    'executed_at': datetime.now().isoformat(),
+                                    'tool_result': str(result)[:500]
+                                })
+                            elif tool_name == 'close_position':
+                                executed_trades.append({
+                                    'ticker': tool_args.get('symbol', 'UNKNOWN'),
+                                    'action': 'SELL',
+                                    'quantity': 'ALL',
+                                    'status': 'submitted',
+                                    'executed_at': datetime.now().isoformat(),
+                                    'tool_result': str(result)[:500]
+                                })
+                            
+                            # Add tool result to messages
+                            from langchain_core.messages import ToolMessage
+                            messages.append(ToolMessage(
+                                content=str(result),
+                                tool_call_id=tool_id
+                            ))
+                            
+                        except Exception as e:
+                            error_msg = f"Error executing {tool_name}: {str(e)}"
+                            logger.error(f"  ❌ {error_msg}")
+                            
+                            # Add error to messages
+                            from langchain_core.messages import ToolMessage
+                            messages.append(ToolMessage(
+                                content=error_msg,
+                                tool_call_id=tool_id
+                            ))
+                    else:
+                        logger.warning(f"  ⚠️  Tool {tool_name} not found")
                 
-                valid_trades.append(trade)
-            
-            logger.info(f"✅ Generated {len(valid_trades)} valid trading decisions (filtered {len(trades) - len(valid_trades)} invalid)")
-            
-            return {
-                "pending_trades": valid_trades,
-                "phase": "decide"
-            }
-        else:
-            logger.info("ℹ️  No trades generated")
-            return {
-                "pending_trades": [],
-                "phase": "decide"
-            }
+                # Continue loop - LLM may want to call more tools
+                iteration += 1
+                
+            else:
+                # No more tool calls - LLM is done
+                if response.content:
+                    logger.info(f"🤖 Final response: {response.content}")
+                logger.info("✅ LLM completed decision-making process")
+                break
+        
+        if iteration >= max_iterations:
+            logger.warning(f"⚠️  Reached maximum iterations ({max_iterations})")
+        
+        logger.info(f"✅ Executed {len(executed_trades)} trade operations")
+        
+        return {
+            "executed_trades": executed_trades,
+            "phase": "execute"
+        }
             
     except Exception as e:
-        logger.error(f"❌ Error making decisions: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        logger.error(f"❌ Error in decision making: {e}", exc_info=True)
         return {
-            "pending_trades": [],
-            "phase": "decide",
+            "executed_trades": [],
+            "phase": "execute",
             "error": str(e)
         }
 

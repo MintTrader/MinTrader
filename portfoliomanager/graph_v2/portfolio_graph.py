@@ -36,12 +36,13 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     3. select_stocks → [conditional]:
        - If stocks selected → analyze_stocks
        - If no stocks → make_decisions
-    4. analyze_stocks → make_decisions: LLM decides on trades
-    5. make_decisions → [conditional]:
-       - If trades pending → execute_trades
-       - If no trades → upload_to_s3
-    6. execute_trades → upload_to_s3: Upload results, summary, and logs to S3
-    7. upload_to_s3 → END
+    4. analyze_stocks → make_decisions: LLM makes decisions AND executes trades autonomously
+       (using OpenAI function calling with full Alpaca MCP tool access)
+    5. make_decisions → upload_to_s3: Upload results, summary, and logs to S3
+    6. upload_to_s3 → END
+    
+    Note: The make_decisions node now directly executes trades using OpenAI function calling
+          with all available Alpaca MCP tools. The separate execute_trades node is no longer used.
     
     Args:
         config: Portfolio configuration dict
@@ -69,7 +70,7 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     workflow.add_node("select_stocks", select_stocks_node)
     workflow.add_node("analyze_stocks", analyze_stocks_node)
     workflow.add_node("make_decisions", make_decisions_node)
-    workflow.add_node("execute_trades", execute_trades_node)
+    # Note: execute_trades_node is deprecated - make_decisions now handles execution
     workflow.add_node("upload_to_s3", upload_results_to_s3_node)
     
     # Define edges
@@ -89,21 +90,11 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
         }
     )
     
-    # analyze → decide
+    # analyze → decide (which now also executes)
     workflow.add_edge("analyze_stocks", "make_decisions")
     
-    # decide → [conditional: execute or upload]
-    workflow.add_conditional_edges(
-        "make_decisions",
-        should_execute_trades,
-        {
-            "execute": "execute_trades",
-            "complete": "upload_to_s3"
-        }
-    )
-    
-    # execute → upload
-    workflow.add_edge("execute_trades", "upload_to_s3")
+    # make_decisions → upload (decisions are executed directly in make_decisions node)
+    workflow.add_edge("make_decisions", "upload_to_s3")
     
     # upload → end
     workflow.add_edge("upload_to_s3", END)
