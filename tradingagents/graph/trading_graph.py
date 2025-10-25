@@ -6,15 +6,12 @@ import json
 from datetime import date
 from typing import Dict, Any, Tuple, List, Optional
 
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.agents.utils.memory import FinancialSituationMemory
+from shared.llm_factory import get_llm_from_config
 from tradingagents.agents.utils.agent_states import (
     AgentState,
     InvestDebateState,
@@ -50,7 +47,7 @@ class TradingAgentsGraph:
         self,
         selected_analysts=["market", "social", "news", "fundamentals"],
         debug=False,
-        config: Dict[str, Any] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -66,23 +63,24 @@ class TradingAgentsGraph:
         set_config(self.config)
 
         # Create necessary directories
+        project_dir = str(self.config.get("project_dir", "."))
         os.makedirs(
-            os.path.join(self.config["project_dir"], "dataflows/data_cache"),
+            os.path.join(project_dir, "dataflows/data_cache"),
             exist_ok=True,
         )
 
-        # Initialize LLMs
-        if self.config["llm_provider"].lower() == "openai" or self.config["llm_provider"] == "ollama" or self.config["llm_provider"] == "openrouter":
-            self.deep_thinking_llm = ChatOpenAI(model=self.config["deep_think_llm"], base_url=self.config["backend_url"])
-            self.quick_thinking_llm = ChatOpenAI(model=self.config["quick_think_llm"], base_url=self.config["backend_url"])
-        elif self.config["llm_provider"].lower() == "anthropic":
-            self.deep_thinking_llm = ChatAnthropic(model=self.config["deep_think_llm"], base_url=self.config["backend_url"])
-            self.quick_thinking_llm = ChatAnthropic(model=self.config["quick_think_llm"], base_url=self.config["backend_url"])
-        elif self.config["llm_provider"].lower() == "google":
-            self.deep_thinking_llm = ChatGoogleGenerativeAI(model=self.config["deep_think_llm"])
-            self.quick_thinking_llm = ChatGoogleGenerativeAI(model=self.config["quick_think_llm"])
-        else:
-            raise ValueError(f"Unsupported LLM provider: {self.config['llm_provider']}")
+        # Initialize LLMs using the factory (supports OpenAI, Ollama, Anthropic, Google)
+        # This automatically enables LangSmith tracing when LANGSMITH_TRACING=true
+        self.deep_thinking_llm = get_llm_from_config(
+            self.config, 
+            model_key="deep_think_llm",
+            temperature=0
+        )
+        self.quick_thinking_llm = get_llm_from_config(
+            self.config,
+            model_key="quick_think_llm",
+            temperature=0
+        )
         
         # Initialize memories
         self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
@@ -115,7 +113,7 @@ class TradingAgentsGraph:
         # State tracking
         self.curr_state = None
         self.ticker = None
-        self.log_states_dict = {}  # date to full state dict
+        self.log_states_dict: Dict[str, Dict[str, Any]] = {}  # date to full state dict
 
         # Set up the graph
         self.graph = self.graph_setup.setup_graph(selected_analysts)

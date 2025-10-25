@@ -2,12 +2,28 @@
 Portfolio Manager Configuration
 
 Configuration settings for the autonomous portfolio management system.
+
+Environment Variables for LLM Configuration:
+- LLM_MODEL: Primary model to use (default: gpt-4o-mini)
+- LLM_PROVIDER: Provider name (openai, ollama, anthropic) - auto-detected if not set
+- OLLAMA_BASE_URL: Ollama server URL (default: http://localhost:11434)
+
+Environment Variables for LangSmith Tracing:
+- LANGSMITH_TRACING: Enable tracing (true/false)
+- LANGSMITH_API_KEY: Your LangSmith API key
+- LANGSMITH_WORKSPACE_ID: Optional workspace ID
+- LANGSMITH_PROJECT: Optional project name (default: "default")
 """
 
 import os
-from tradingagents.default_config import DEFAULT_CONFIG
 
 PORTFOLIO_CONFIG = {
+    # LLM Settings
+    # Note: Agents require tool-calling support. Ollama models with tool support work great!
+    "llm_model": os.getenv("AGENT_LLM_MODEL") or os.getenv("LLM_MODEL", "gpt-oss:20b"),  # Agent LLM (ReAct, tool calling)
+    "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),    # Default to ollama for local development
+    "backend_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),  # Ollama server URL
+    
     # S3 Settings
     "s3_bucket_name": os.getenv("S3_BUCKET_NAME", "mintrader-reports"),
     "s3_region": os.getenv("S3_REGION", "us-east-1"),
@@ -15,7 +31,6 @@ PORTFOLIO_CONFIG = {
     # Trading Strategy
     "strategy_objective": "maximize_profits",
     "trading_style": "medium_term",  # weeks to months, hold winners
-    "min_conviction_score": 7,        # Only execute high-conviction trades (quality > quantity)
     "min_holding_days": 7,            # Don't panic sell - give positions time to work
     
     # Trading Constraints
@@ -56,30 +71,41 @@ PORTFOLIO_CONFIG = {
     # - Iteration limits (deterministic workflow)
     
     # Analysis Config (passed to TradingAgentsGraph)
-    # Comprehensive analysis with all 4 analysts for complete coverage
-    # Includes: technical analysis, news, fundamentals, and sentiment
-    "analysis_analysts": ["market", "news", "fundamentals", "social"],
+    # Use minimal analysts to avoid slow/expensive operations
+    "analysis_analysts": ["market", "fundamentals"],  # Removed news & social to avoid OpenAI
     "analysis_config": {
-        **DEFAULT_CONFIG,
-        # Use GPT-4o-mini for orchestrator (better instruction-following than nano)
-        "deep_think_llm": "gpt-4o-mini",       # Use mini for analysis (better quality)
-        "quick_think_llm": "gpt-4o-mini",      # Use mini for orchestrator decisions (better instruction-following)
-        "backend_url": "https://api.openai.com/v1",
+        # Start fresh - don't use DEFAULT_CONFIG to avoid OpenAI dependencies
+        "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+        "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", "./results"),
+        "data_cache_dir": os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "tradingagents/dataflows/data_cache"),
+        
+        # Use local Ollama for analysis (zero cost!)
+        "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
+        "deep_think_llm": os.getenv("LLM_MODEL", "gpt-oss:20b"),
+        "quick_think_llm": os.getenv("LLM_MODEL", "gpt-oss:20b"),
+        "backend_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        
         # Minimize debate rounds to reduce LLM calls
         "max_debate_rounds": 1,
         "max_risk_discuss_rounds": 1,
-        # Use only fast news sources - avoid slow Reddit/local sources
+        "max_recur_limit": 100,
+        
+        # Use only free/local data sources - NO OpenAI
         "data_vendors": {
             "core_stock_apis": "alpaca",
             "technical_indicators": "alpaca",
             "fundamental_data": "yfinance",
-            "news_data": "alpaca,openai",  # Only use fast news sources
+            "news_data": "alpaca",  # Only Alpaca (free)
         },
-        # Override specific tools to use fastest vendors
+        # Override specific tools to use free vendors only
         "tool_vendors": {
-            "get_global_news": "openai",  # Use only OpenAI for global news (fastest)
-            "get_news": "alpaca,openai",   # Use Alpaca first, OpenAI as fallback
+            "get_global_news": "alpaca",
+            "get_news": "alpaca",
         },
+        
+        # Alpaca configuration
+        "alpaca_paper_mode": True,
+        "requests_verify_ssl": False,
     },
 }
 

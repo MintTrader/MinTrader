@@ -1,15 +1,21 @@
 """
 Portfolio Management Module
 
-LLM-driven autonomous portfolio management system with web search.
-Single smart orchestrator that handles stock discovery, analysis, and trading decisions.
+LangGraph-based autonomous portfolio management system.
+Uses graph architecture with MCP tools for trading operations.
 """
 
-from .orchestrator_manager import OrchestratorPortfolioManager
 from .config import PORTFOLIO_CONFIG
+from .graph_v2 import (
+    create_portfolio_graph,
+    run_portfolio_iteration,
+    PortfolioState,
+)
 
-# Backward compatibility alias
-PortfolioManager = OrchestratorPortfolioManager
-
-__all__ = ['PortfolioManager', 'OrchestratorPortfolioManager', 'PORTFOLIO_CONFIG']
+__all__ = [
+    'PORTFOLIO_CONFIG',
+    'create_portfolio_graph',
+    'run_portfolio_iteration',
+    'PortfolioState',
+]
 

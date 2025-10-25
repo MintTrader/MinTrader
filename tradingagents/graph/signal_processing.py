@@ -1,12 +1,12 @@
 # TradingAgents/graph/signal_processing.py
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models import BaseChatModel
 
 
 class SignalProcessor:
     """Processes trading signals to extract actionable decisions."""
 
-    def __init__(self, quick_thinking_llm: ChatOpenAI):
+    def __init__(self, quick_thinking_llm: BaseChatModel):
         """Initialize with an LLM for processing."""
         self.quick_thinking_llm = quick_thinking_llm
 
@@ -28,4 +28,4 @@ class SignalProcessor:
             ("human", full_signal),
         ]
 
-        return self.quick_thinking_llm.invoke(messages).content
+        return str(self.quick_thinking_llm.invoke(messages).content)
