@@ -24,10 +24,16 @@ from datetime import datetime
 
 # Create logs directory
 LOGS_DIR = Path("./logs")
-LOGS_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Generate log filename with timestamp
 log_filename = LOGS_DIR / f"portfolio_manager_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Verify directory was created
+if not LOGS_DIR.exists():
+    print(f"WARNING: Failed to create logs directory at {LOGS_DIR.absolute()}")
+else:
+    print(f"Logs directory: {LOGS_DIR.absolute()}")
 
 # Configure logging - suppress MCP server logs
 logging.basicConfig(
@@ -96,6 +102,8 @@ def main():
     
     logger.info("Portfolio Manager initialized")
     logger.info(f"Logging to: {log_filename}")
+    logger.info(f"Log file exists: {Path(log_filename).exists()}")
+    logger.info(f"CURRENT_LOG_FILE: {CURRENT_LOG_FILE}")
     
     # Load config
     config = PORTFOLIO_CONFIG.copy()

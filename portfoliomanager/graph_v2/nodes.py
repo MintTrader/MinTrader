@@ -39,21 +39,42 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
     The agent autonomously calls the necessary tools to gather portfolio information.
     This is the first node in the workflow - it establishes the baseline state.
     
-    Also fetches recently analyzed stocks from S3 to avoid redundant analysis.
+    Also fetches:
+    - Last iteration summary from S3 (for continuity)
+    - Recently analyzed stocks from S3 (to avoid redundant analysis)
     
     Returns:
-        State updates with portfolio snapshot and recently analyzed stocks
+        State updates with portfolio snapshot, last summary, and recently analyzed stocks
     """
     logger.info("📊 [ASSESS] Gathering portfolio information...")
     
     try:
+        config = state.get("config", {})
+        s3_bucket = config.get("s3_bucket_name")
+        s3_region = config.get("s3_region", "us-east-1")
+        
+        # Fetch last iteration summary from S3
+        last_summary = ""
+        if s3_bucket:
+            try:
+                logger.info("📜 Fetching last iteration summary from S3...")
+                s3_manager = S3ReportManager(s3_bucket, s3_region)
+                last_summary = s3_manager.get_last_summary() or ""
+                
+                if last_summary:
+                    logger.info("=" * 70)
+                    logger.info("📜 LAST ITERATION SUMMARY")
+                    logger.info("=" * 70)
+                    logger.info(last_summary)
+                    logger.info("=" * 70)
+                else:
+                    logger.info("ℹ️  No previous summary found (first run)")
+            except Exception as e:
+                logger.warning(f"Could not fetch last summary from S3: {e}")
+        
         # Fetch recently analyzed stocks from S3
         recently_analyzed_data = {}
         try:
-            config = state.get("config", {})
-            s3_bucket = config.get("s3_bucket_name")
-            s3_region = config.get("s3_region", "us-east-1")
-            
             if s3_bucket:
                 logger.info("📦 Fetching recently analyzed stocks from S3...")
                 s3_manager = S3ReportManager(s3_bucket, s3_region)
@@ -209,7 +230,7 @@ IMPORTANT: Call all 4 tools at once in your first response, don't wait for resul
         
         return {
             "phase": "assess",
-            "last_summary": portfolio_summary or "Portfolio assessed",
+            "last_summary": last_summary,  # Last iteration summary from S3
             "account": account_info,
             "positions": positions,
             "recently_analyzed": recently_analyzed_data
@@ -844,42 +865,108 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
         
         logger.info(f"📦 Uploaded {upload_count}/{len(analysis_results)} stock analyses to S3")
         
-        # Create and upload iteration summary
+        # Generate intelligent summary with LLM guidance for next run
         try:
-            summary_lines = [
-                f"Portfolio Manager Iteration: {iteration_id}",
-                f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"",
-                f"Account Status:",
-                f"  Cash: ${state.get('account', {}).get('cash', 0):,.2f}",
-                f"  Portfolio Value: ${state.get('account', {}).get('portfolio_value', 0):,.2f}",
-                f"  Positions: {len(state.get('positions', []))}",
-                f"",
-                f"Analysis:",
-                f"  Stocks Analyzed: {len(analysis_results)}",
-                f"  Stocks: {', '.join(analysis_results.keys()) if analysis_results else 'None'}",
-                f"",
-                f"Trading:",
-                f"  Decisions Made: {len(state.get('pending_trades', []))}",
-                f"  Trades Executed: {len(state.get('executed_trades', []))}",
-            ]
+            logger.info("📝 Generating iteration summary with agent guidance...")
             
-            if state.get('executed_trades'):
-                summary_lines.append(f"")
-                summary_lines.append(f"Executed Trades:")
-                for trade in state.get('executed_trades', []):
-                    action = trade.get('action', 'UNKNOWN')
-                    ticker = trade.get('ticker', 'UNKNOWN')
-                    qty = trade.get('quantity', 0)
-                    summary_lines.append(f"  - {action} {qty} shares of {ticker}")
+            # Prepare data for summary
+            account = state.get('account', {})
+            positions = state.get('positions', [])
+            executed_trades = state.get('executed_trades', [])
+            last_summary = state.get('last_summary', '')
             
-            summary = "\n".join(summary_lines)
+            # Build context for LLM
+            summary_prompt = f"""You are a portfolio management system. Generate a comprehensive summary of this iteration 
+and provide clear guidance/tasks for the next iteration.
+
+ITERATION: {iteration_id}
+DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+PREVIOUS ITERATION NOTES:
+{last_summary if last_summary else "(This is the first iteration)"}
+
+CURRENT PORTFOLIO STATE:
+- Cash Available: ${account.get('cash', 0):,.2f}
+- Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
+- Number of Positions: {len(positions)}
+
+POSITIONS:
+{chr(10).join([f"  - {p.get('symbol')}: {p.get('qty')} shares @ ${p.get('current_price', 0):.2f}, P&L: {(p.get('unrealized_plpc', 0) * 100):+.1f}%" for p in positions]) if positions else "  (No positions)"}
+
+THIS ITERATION:
+- Stocks Analyzed: {len(analysis_results)} ({', '.join(analysis_results.keys()) if analysis_results else 'None'})
+- Trades Executed: {len(executed_trades)}
+
+EXECUTED TRADES:
+{chr(10).join([f"  - {t.get('action')} {t.get('ticker')}: {t.get('reasoning', 'N/A')}" for t in executed_trades]) if executed_trades else "  (No trades executed)"}
+
+ANALYSIS RESULTS:
+"""
+            
+            for ticker, result in analysis_results.items():
+                summary_prompt += f"\n{ticker}:\n"
+                summary_prompt += f"  Recommendation: {result.get('recommendation', 'UNKNOWN')}\n"
+                # Include a snippet of the decision
+                decision = result.get('final_trade_decision', '')[:200]
+                summary_prompt += f"  Decision: {decision}...\n"
+            
+            summary_prompt += """
+
+Generate a summary with these sections:
+
+## ITERATION SUMMARY
+(Brief overview of what happened this iteration)
+
+## PORTFOLIO STATUS
+(Current health, performance, concerns)
+
+## ACTIONS TAKEN
+(What trades were executed and why)
+
+## TASKS FOR NEXT RUN
+(Specific actionable tasks and focus areas for the next iteration)
+- Check on [specific stocks/positions]
+- Monitor [specific metrics/events]
+- Consider [specific opportunities]
+
+## NOTES
+(Any important observations or context for future iterations)
+
+Keep it concise but actionable. Focus on continuity and learning from this iteration."""
+            
+            # Generate summary using LLM
+            llm = get_quick_llm(config)
+            response = llm.invoke([HumanMessage(content=summary_prompt)])
+            summary: str = str(response.content)  # Ensure it's a string
+            
+            # Print summary before uploading
+            logger.info("=" * 70)
+            logger.info("📊 ITERATION SUMMARY")
+            logger.info("=" * 70)
+            logger.info(summary)
+            logger.info("=" * 70)
             
             s3_manager.save_summary(summary, iteration_id)
             logger.info("📦 Uploaded iteration summary to S3")
             
         except Exception as e:
-            logger.error(f"Could not upload summary to S3: {e}")
+            logger.error(f"Could not generate/upload summary to S3: {e}")
+            # Fallback to simple summary if LLM fails
+            try:
+                simple_summary = f"""Portfolio Manager Iteration: {iteration_id}
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
+Cash: ${account.get('cash', 0):,.2f}
+Positions: {len(positions)}
+
+Stocks Analyzed: {', '.join(analysis_results.keys()) if analysis_results else 'None'}
+Trades Executed: {len(executed_trades)}
+"""
+                s3_manager.save_summary(simple_summary, iteration_id)
+                logger.info("📦 Uploaded fallback summary to S3")
+            except Exception as fallback_error:
+                logger.error(f"Even fallback summary failed: {fallback_error}")
         
         # Upload logs - get the current log file from main.py
         try:
@@ -888,12 +975,15 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
             
             if log_file and Path(log_file).exists():
                 s3_manager.upload_log(iteration_id, Path(log_file))
-                logger.info("📦 Uploaded logs to S3")
+                logger.info(f"📦 Uploaded logs to S3: logs/{iteration_id}/message_tool.log")
+                logger.info(f"   Source: {log_file}")
             else:
-                logger.debug("ℹ️  No log file available for upload")
+                logger.warning(f"⚠️  No log file available for upload!")
+                logger.warning(f"   CURRENT_LOG_FILE: {log_file}")
+                logger.warning(f"   File exists: {Path(log_file).exists() if log_file else 'N/A'}")
                 
         except Exception as e:
-            logger.error(f"Could not upload logs to S3: {e}")
+            logger.error(f"❌ Could not upload logs to S3: {e}")
         
         return {
             "phase": "complete"
