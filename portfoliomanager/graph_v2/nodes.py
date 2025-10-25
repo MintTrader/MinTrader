@@ -57,7 +57,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
                 logger.info("📦 Fetching recently analyzed stocks from S3...")
                 s3_manager = S3ReportManager(s3_bucket, s3_region)
                 
-                # Get stocks analyzed in the last 3 days
+                # Get stocks analyzed in the last 14 days (2 weeks)
                 stock_history = s3_manager.get_analyzed_stocks_history(days_threshold=14)
                 
                 # Format for state
@@ -231,8 +231,9 @@ def select_stocks_node(state: PortfolioState) -> Dict[str, Any]:
     
     This unified node:
     1. Takes current portfolio state (positions, cash, orders)
-    2. Uses LLM to recommend stocks based on portfolio needs
-    3. Recommends 0-3 specific tickers for analysis
+    2. Uses LLM to recommend stocks based on portfolio needs and market knowledge
+    3. Excludes stocks analyzed in the past 2 weeks (from S3 history)
+    4. Recommends 0-3 specific tickers for analysis
     
     Input from state:
     - account: Current cash and portfolio value
@@ -262,68 +263,64 @@ def select_stocks_node(state: PortfolioState) -> Dict[str, Any]:
         positions = state.get("positions", [])
         recently_analyzed = state.get("recently_analyzed", {})
         
-        # Build exclusion list (stocks analyzed in past 3 days)
+        # Build exclusion list (stocks analyzed in past 2 weeks)
         stocks_to_exclude = set()
+        recently_analyzed_details = []
         for item in recently_analyzed.get("recently_analyzed", []):
-            if item.get("days_ago", 999) < 3:
-                stocks_to_exclude.add(item["ticker"])
+            ticker = item.get("ticker")
+            days_ago = item.get("days_ago", 999)
+            date = item.get("date", "")
+            if days_ago < 14:  # Past 2 weeks
+                stocks_to_exclude.add(ticker)
+                recently_analyzed_details.append(f"{ticker} ({days_ago} days ago on {date})")
         
         position_tickers: list[str] = [
             str(p.get("symbol")) for p in positions if p.get("symbol")
         ]
         
-        # Build comprehensive prompt for research + selection
-        prompt = f"""You are a portfolio manager. Recommend 1-{max_analyses} stocks for deep analysis.
+        # Build comprehensive prompt for stock selection
+        prompt = f"""You are an expert portfolio manager. Your task is to recommend 1-{max_analyses} high-quality stocks for deep analysis.
 
 CURRENT PORTFOLIO STATE:
 💰 Cash Available: ${account.get('cash', 0):,.2f}
-📦 Positions: {len(positions)}
+📈 Portfolio Value: ${account.get('portfolio_value', 0):,.2f}
+📦 Current Positions: {len(positions)}
 {chr(10).join([f"  - {p.get('symbol')}: {p.get('qty')} shares @ ${p.get('current_price', 0):.2f}, P&L: {(p.get('unrealized_plpc', 0) * 100):+.1f}%" for p in positions]) if positions else "  (Empty portfolio - perfect opportunity to find new positions!)"}
 
-🚫 DO NOT RECOMMEND: {', '.join(sorted(stocks_to_exclude)) if stocks_to_exclude else 'None'}
-   (Analyzed in past 3 days)
+🚫 STOCKS TO EXCLUDE (analyzed in past 2 weeks):
+{chr(10).join([f"  - {detail}" for detail in recently_analyzed_details]) if recently_analyzed_details else "  None"}
 
-TASK:
-Based on your knowledge of markets, recommend 1-{max_analyses} high-quality stocks for analysis.
+DO NOT recommend any of these: {', '.join(sorted(stocks_to_exclude)) if stocks_to_exclude else 'None'}
 
-Consider:
-- Existing positions: {', '.join(position_tickers) if position_tickers else 'None (empty portfolio - recommend growth stocks!)'}
-- Diversification across sectors
-- Liquid, established companies (avoid penny stocks and microcaps)
-- Mix of growth and value opportunities
+CURRENT HOLDINGS: {', '.join(position_tickers) if position_tickers else 'None (empty portfolio)'}
 
-RESPONSE FORMAT - CRITICAL:
-Output ONLY valid JSON. No markdown code blocks, no explanations, no extra text.
-Start your response with {{ and end with }}.
+SELECTION CRITERIA:
+1. Diversification: Consider sectors not heavily represented in current positions
+2. Quality: Focus on established companies with strong fundamentals
+3. Liquidity: Avoid penny stocks and microcaps (min market cap $1B)
+4. Current momentum: Look for positive price action and catalysts
+5. Mix: Balance between growth and value opportunities
 
-Required JSON structure:
+IMPORTANT: Do NOT recommend stocks we analyzed in the past 2 weeks (see exclusion list above).
+
+Provide your final recommendations in this EXACT JSON format:
 {{
   "stocks": [
-    {{"ticker": "TICKER", "rationale": "Specific reason for recommendation", "sector": "sector"}}
+    {{"ticker": "SYMBOL", "rationale": "Brief reason for recommendation", "sector": "sector name"}}
   ]
 }}
 
-**MANDATORY RULES**:
-1. Output ONLY the JSON object, nothing else
-2. Do NOT wrap in ```json``` or ``` tags
-3. The "stocks" array MUST contain 1-{max_analyses} stocks
-4. Use only well-known ticker symbols (e.g., AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD, etc.)
-"""
+Output ONLY the JSON. No markdown, no code blocks, no extra text."""
         
         logger.info("🔎 Selecting stocks for analysis...")
         
-        response = llm.invoke([
-            SystemMessage(content="""You are a portfolio manager. Recommend stocks for analysis.
-
-CRITICAL: You MUST respond with ONLY valid JSON. No markdown, no code blocks, no explanations outside the JSON.
-Start your response with { and end with }. Do not wrap in ```json``` tags."""),
-            HumanMessage(content=prompt)
-        ])
+        response = llm.invoke([HumanMessage(content=prompt)])
+        response_content = response.content
         
         # Parse response
         import json
         import re
-        content = str(response.content)
+        content = str(response_content)
         
         # Extract JSON from response - handle both raw JSON and markdown wrapped
         # First try to extract from markdown code blocks
