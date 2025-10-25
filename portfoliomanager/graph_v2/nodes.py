@@ -968,19 +968,18 @@ Trades Executed: {len(executed_trades)}
             except Exception as fallback_error:
                 logger.error(f"Even fallback summary failed: {fallback_error}")
         
-        # Upload logs - get the current log file from main.py
+        # Upload logs - get the log file path from config
         try:
-            import portfoliomanager.main as pm_main
-            log_file = getattr(pm_main, 'CURRENT_LOG_FILE', None)
+            log_file_path = config.get('log_file_path')
             
-            if log_file and Path(log_file).exists():
-                s3_manager.upload_log(iteration_id, Path(log_file))
+            if log_file_path and Path(log_file_path).exists():
+                s3_manager.upload_log(iteration_id, Path(log_file_path))
                 logger.info(f"📦 Uploaded logs to S3: logs/{iteration_id}/message_tool.log")
-                logger.info(f"   Source: {log_file}")
+                logger.info(f"   Source: {log_file_path}")
             else:
                 logger.warning(f"⚠️  No log file available for upload!")
-                logger.warning(f"   CURRENT_LOG_FILE: {log_file}")
-                logger.warning(f"   File exists: {Path(log_file).exists() if log_file else 'N/A'}")
+                logger.warning(f"   log_file_path from config: {log_file_path}")
+                logger.warning(f"   File exists: {Path(log_file_path).exists() if log_file_path else 'N/A'}")
                 
         except Exception as e:
             logger.error(f"❌ Could not upload logs to S3: {e}")

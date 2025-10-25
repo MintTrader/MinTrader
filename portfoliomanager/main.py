@@ -65,15 +65,9 @@ from .config import PORTFOLIO_CONFIG
 from .graph_v2 import run_portfolio_iteration
 from .graph_v2.portfolio_graph import stream_portfolio_iteration
 
-# Store log filename globally so it can be accessed by graph nodes
-CURRENT_LOG_FILE = None
-
 
 def main():
     """Main entry point for portfolio manager"""
-    global CURRENT_LOG_FILE
-    CURRENT_LOG_FILE = log_filename
-    
     # Print startup message before any MCP initialization
     print("\n🚀 Starting Portfolio Manager...")
     print("=" * 60)
@@ -101,9 +95,7 @@ def main():
     args = parser.parse_args()
     
     logger.info("Portfolio Manager initialized")
-    logger.info(f"Logging to: {log_filename}")
-    logger.info(f"Log file exists: {Path(log_filename).exists()}")
-    logger.info(f"CURRENT_LOG_FILE: {CURRENT_LOG_FILE}")
+    logger.info(f"Logging to: {log_filename.absolute()}")
     
     # Load config
     config = PORTFOLIO_CONFIG.copy()
@@ -112,6 +104,9 @@ def main():
         with open(args.config, 'r') as f:
             custom_config = json.load(f)
             config.update(custom_config)
+    
+    # Add log file path to config so it can be uploaded to S3
+    config['log_file_path'] = str(log_filename)
     
     try:
         run_portfolio_manager(config, args.mode, args.stream)
