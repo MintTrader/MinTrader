@@ -15,11 +15,29 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Set environment variable to suppress MCP logs in subprocesses
+os.environ.setdefault('MCP_LOG_LEVEL', 'ERROR')
+
+# Setup logging with both console and file output
+from pathlib import Path
+from datetime import datetime
+
+# Create logs directory
+LOGS_DIR = Path("./logs")
+LOGS_DIR.mkdir(exist_ok=True)
+
+# Generate log filename with timestamp
+log_filename = LOGS_DIR / f"portfolio_manager_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
 # Configure logging - suppress MCP server logs
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler(log_filename)  # File output
+    ]
 )
 
 # Suppress verbose MCP server logs (these are very noisy in production)
@@ -37,16 +55,19 @@ logging.getLogger('httpcore').setLevel(logging.WARNING)
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
-# Set environment variable to suppress MCP logs in subprocesses
-os.environ.setdefault('MCP_LOG_LEVEL', 'ERROR')
-
 from .config import PORTFOLIO_CONFIG
 from .graph_v2 import run_portfolio_iteration
 from .graph_v2.portfolio_graph import stream_portfolio_iteration
 
+# Store log filename globally so it can be accessed by graph nodes
+CURRENT_LOG_FILE = None
+
 
 def main():
     """Main entry point for portfolio manager"""
+    global CURRENT_LOG_FILE
+    CURRENT_LOG_FILE = log_filename
+    
     # Print startup message before any MCP initialization
     print("\n🚀 Starting Portfolio Manager...")
     print("=" * 60)
@@ -74,6 +95,7 @@ def main():
     args = parser.parse_args()
     
     logger.info("Portfolio Manager initialized")
+    logger.info(f"Logging to: {log_filename}")
     
     # Load config
     config = PORTFOLIO_CONFIG.copy()

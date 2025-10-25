@@ -758,13 +758,21 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
         results_dir = Path(config.get("analysis_config", {}).get("results_dir", "./results"))
         upload_count = 0
         
+        logger.info(f"📊 Looking for reports in: {results_dir}")
+        
         for ticker, result in analysis_results.items():
             try:
                 analysis_date = result.get("date", datetime.now().strftime("%Y-%m-%d"))
                 
                 # Check if reports exist for this ticker
                 ticker_dir = results_dir / ticker / "TradingAgentsStrategy_logs"
+                logger.info(f"  🔍 Checking for {ticker} reports at: {ticker_dir}")
+                
                 if ticker_dir.exists():
+                    # Count files in directory
+                    files = list(ticker_dir.glob('*.md'))
+                    logger.info(f"  📄 Found {len(files)} report files for {ticker}")
+                    
                     # Upload reports
                     success = s3_manager.upload_reports(
                         ticker=ticker,
@@ -773,14 +781,18 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
                     )
                     if success:
                         upload_count += 1
-                        logger.info(f"  ✅ Uploaded {ticker} analysis to S3")
+                        logger.info(f"  ✅ Uploaded {ticker} analysis to S3 (reports/{ticker}/{analysis_date}/)")
                     else:
                         logger.warning(f"  ⚠️  Could not upload {ticker} analysis")
                 else:
-                    logger.debug(f"  ℹ️  No reports directory found for {ticker}")
+                    logger.warning(f"  ⚠️  Reports directory not found: {ticker_dir}")
+                    # List what's in results_dir to help debug
+                    if results_dir.exists():
+                        subdirs = [d.name for d in results_dir.iterdir() if d.is_dir()]
+                        logger.debug(f"  Available directories in {results_dir}: {subdirs}")
                     
             except Exception as e:
-                logger.error(f"  ❌ Error uploading {ticker} results: {e}")
+                logger.error(f"  ❌ Error uploading {ticker} results: {e}", exc_info=True)
         
         logger.info(f"📦 Uploaded {upload_count}/{len(analysis_results)} stock analyses to S3")
         
@@ -821,16 +833,16 @@ def upload_results_to_s3_node(state: PortfolioState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Could not upload summary to S3: {e}")
         
-        # Upload logs if they exist
+        # Upload logs - get the current log file from main.py
         try:
-            log_dir = results_dir / "portfolio_manager" / iteration_id
-            if log_dir.exists():
-                log_file = log_dir / "message_tool.log"
-                if log_file.exists():
-                    s3_manager.upload_log(iteration_id, log_file)
-                    logger.info("📦 Uploaded logs to S3")
+            import portfoliomanager.main as pm_main
+            log_file = getattr(pm_main, 'CURRENT_LOG_FILE', None)
+            
+            if log_file and Path(log_file).exists():
+                s3_manager.upload_log(iteration_id, Path(log_file))
+                logger.info("📦 Uploaded logs to S3")
             else:
-                logger.debug("ℹ️  No logs directory found")
+                logger.debug("ℹ️  No log file available for upload")
                 
         except Exception as e:
             logger.error(f"Could not upload logs to S3: {e}")
