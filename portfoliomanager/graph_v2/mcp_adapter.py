@@ -28,10 +28,11 @@ async def _init_alpaca_toolkit_async():
         )
     
     # Initialize MCP client with Alpaca server
+    # Use the alpaca-mcp-server command installed by the package
     client = MultiServerMCPClient({
         "alpaca": {
-            "command": "uvx",
-            "args": ["alpaca-mcp-server", "serve"],
+            "command": "alpaca-mcp-server",
+            "args": ["serve"],
             "transport": "stdio",
             "env": {
                 "ALPACA_API_KEY": api_key,
@@ -114,7 +115,7 @@ def get_alpaca_mcp_tools() -> List[BaseTool]:
             "1. Set ALPACA_API_KEY and ALPACA_SECRET_KEY in your .env file\n"
             "2. Run: poetry run portfoliomanager\n"
             "\n"
-            "Note: The MCP client will automatically start the Alpaca server via uvx."
+            "Note: The MCP client will automatically start the Alpaca server using Python."
         )
     
     # Run async initialization in sync context
@@ -124,7 +125,21 @@ def get_alpaca_mcp_tools() -> List[BaseTool]:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     
-    return loop.run_until_complete(_init_alpaca_toolkit_async())
+    try:
+        return loop.run_until_complete(_init_alpaca_toolkit_async())
+    except (FileNotFoundError, ModuleNotFoundError) as e:
+        error_msg = str(e)
+        if 'alpaca_mcp_server' in error_msg or 'alpaca-mcp-server' in error_msg:
+            raise RuntimeError(
+                "alpaca-mcp-server not installed. MCP tools require this package.\n"
+                "\n"
+                "To install:\n"
+                "  poetry install\n"
+                "\n"
+                "Or manually:\n"
+                "  pip install alpaca-mcp-server\n"
+            ) from e
+        raise
 
 
 def get_alpaca_tool(tools: List[BaseTool], tool_name: str) -> BaseTool:

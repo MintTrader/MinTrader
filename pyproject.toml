@@ -28,7 +28,7 @@ packages = [
 [tool.poetry.dependencies]
 python = "^3.10"
 akshare = "^1.16.98"
-alpaca-py = "^0.29.0"
+alpaca-py = "^0.43.0"
 backtrader = "^1.9.78.123"
 chromadb = "^1.0.12"
 eodhd = "^1.0.32"
@@ -67,6 +67,7 @@ python-dateutil = "^2.8.0"
 httpx = "^0.28.0"
 langchain-mcp-adapters = "^0.1.0"
 langsmith = "^0.3.45"
+alpaca-mcp-server = "^1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 # Add development dependencies here if needed
