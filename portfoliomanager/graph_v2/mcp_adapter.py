@@ -30,7 +30,6 @@ async def _init_alpaca_toolkit_async():
     # Initialize MCP client with Alpaca server
     # Use the alpaca-mcp-server command installed by the package
     # Suppress MCP server logs by setting log level to ERROR
-    import os
     env_config = {
         "ALPACA_API_KEY": api_key,
         "ALPACA_SECRET_KEY": secret_key,

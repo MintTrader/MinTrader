@@ -200,7 +200,8 @@ def route_to_vendor(method: str, *args, **kwargs):
         for impl_func, vendor_name in vendor_methods:
             try:
                 if DEBUG_LOGGING:
-                    logger.debug(f"Calling {impl_func.__name__} from vendor '{vendor_name}'...")                result = impl_func(*args, **kwargs)
+                    logger.debug(f"Calling {impl_func.__name__} from vendor '{vendor_name}'...")
+                result = impl_func(*args, **kwargs)
                 vendor_results.append(result)
                 if DEBUG_LOGGING:
                     logger.debug(f"SUCCESS: {impl_func.__name__} from vendor '{vendor_name}' completed successfully")
