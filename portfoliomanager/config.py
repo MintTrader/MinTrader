@@ -20,9 +20,10 @@ import os
 PORTFOLIO_CONFIG = {
     # LLM Settings
     # Note: Agents require tool-calling support. Ollama models with tool support work great!
-    "llm_model": os.getenv("AGENT_LLM_MODEL") or os.getenv("LLM_MODEL", "gpt-oss:20b"),  # Agent LLM (ReAct, tool calling)
-    "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),    # Default to ollama for local development
-    "backend_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),  # Ollama server URL
+    # In production (Render), use OpenAI. Locally, use Ollama.
+    "llm_model": os.getenv("AGENT_LLM_MODEL") or os.getenv("LLM_MODEL", "gpt-4o-mini"),  # Agent LLM (ReAct, tool calling)
+    "llm_provider": os.getenv("LLM_PROVIDER", "openai"),    # Default to openai for cloud deployment
+    "backend_url": os.getenv("BACKEND_URL"),  # Optional: Only set if using custom endpoint
     
     # S3 Settings
     "s3_bucket_name": os.getenv("S3_BUCKET_NAME", "mintrader-reports"),
@@ -79,11 +80,11 @@ PORTFOLIO_CONFIG = {
         "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", "./results"),
         "data_cache_dir": os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "tradingagents/dataflows/data_cache"),
         
-        # Use local Ollama for analysis (zero cost!)
-        "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
-        "deep_think_llm": os.getenv("LLM_MODEL", "gpt-oss:20b"),
-        "quick_think_llm": os.getenv("LLM_MODEL", "gpt-oss:20b"),
-        "backend_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        # Use OpenAI for cloud deployment (Ollama for local development)
+        "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
+        "deep_think_llm": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        "quick_think_llm": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        "backend_url": os.getenv("BACKEND_URL"),
         
         # Minimize debate rounds to reduce LLM calls
         "max_debate_rounds": 1,
