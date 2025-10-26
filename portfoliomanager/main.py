@@ -29,12 +29,6 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # Generate log filename with timestamp
 log_filename = LOGS_DIR / f"portfolio_manager_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
-# Verify directory was created
-if not LOGS_DIR.exists():
-    print(f"WARNING: Failed to create logs directory at {LOGS_DIR.absolute()}")
-else:
-    print(f"Logs directory: {LOGS_DIR.absolute()}")
-
 # Configure logging - suppress MCP server logs
 logging.basicConfig(
     level=logging.INFO,
@@ -68,10 +62,6 @@ from .graph_v2.portfolio_graph import stream_portfolio_iteration
 
 def main():
     """Main entry point for portfolio manager"""
-    # Print startup message before any MCP initialization
-    print("\n🚀 Starting Portfolio Manager...")
-    print("=" * 60)
-    
     parser = argparse.ArgumentParser(
         description="LangGraph-based Autonomous Portfolio Management System"
     )

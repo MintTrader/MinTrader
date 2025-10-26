@@ -419,62 +419,18 @@ def update_summary_node(state: PortfolioState) -> Dict[str, Any]:
     logger.info("📝 [SUMMARY] Updating agent memory...")
     
     try:
-        # Check if market was closed - create special summary
+        # Check if market was closed - skip summary creation entirely
         phase = state.get("phase", "")
         if phase == "market_closed":
             market_clock = state.get("market_clock", {})
             next_open = market_clock.get("next_open", "Unknown")
-            iteration_id = state.get("iteration_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
             
-            logger.warning("🚫 Market was closed - creating market closed summary")
+            logger.warning("🚫 Market was closed - skipping summary creation")
+            logger.info("📝 No summary will be saved (market closed)")
             
-            summary = f"""MARKET CLOSED SUMMARY
-Run Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Iteration ID: {iteration_id}
-Status: Market is closed
-Next Market Open: {next_open}
-
-Action Taken: No trading operations performed (market closed)
-Next Steps: Wait for market to open before running again
-"""
-            
-            # ALWAYS try to save to S3 for continuity - S3 is required
-            config = state.get("config", {})
-            s3_bucket = config.get("s3_bucket_name")
-            s3_region = config.get("s3_region", "us-east-1")
-            
-            if not s3_bucket:
-                logger.error("❌ S3 bucket not configured! Cannot save market closed summary.")
-                logger.error("⚠️  Summary will be lost. Set S3_BUCKET_NAME in environment.")
-                # Still return successfully but note the error
-                return {
-                    "phase": "complete",
-                    "summary": summary,
-                    "run_count": 0,
-                    "error": "S3 not configured - summary not saved"
-                }
-            
-            # Try to save summary to S3
-            try:
-                s3_manager = S3ReportManager(s3_bucket, s3_region)
-                s3_manager.save_summary(summary, iteration_id)
-                logger.info("✅ Market closed summary saved to S3")
-                logger.info(f"📁 S3 Path: s3://{s3_bucket}/portfolio_manager/summaries/")
-            except Exception as e:
-                logger.error(f"❌ Failed to save market closed summary to S3: {e}")
-                logger.error("⚠️  Summary will be lost for next run")
-                # Return with error but don't fail the whole workflow
-                return {
-                    "phase": "complete",
-                    "summary": summary,
-                    "run_count": 0,
-                    "error": f"Failed to save to S3: {str(e)}"
-                }
-            
-            # Success - summary saved
+            # Return early without saving anything
             return {
                 "phase": "complete",
-                "summary": summary,
                 "run_count": 0  # Don't increment run count for market closed
             }
         
