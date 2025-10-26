@@ -73,6 +73,10 @@ alpaca-mcp-server = "^1.0.0"
 [tool.poetry.scripts]
 portfoliomanager = "portfoliomanager.main:main"
 
+[tool.mypy]
+ignore_missing_imports = true
+
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

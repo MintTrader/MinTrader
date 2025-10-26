@@ -7,6 +7,7 @@ Returns raw position data - agent uses stock tools to analyze further.
 
 from typing import Dict, List, Any, Optional
 import os
+import logging
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -18,6 +19,8 @@ from datetime import datetime, timedelta
 # Ensure .env is loaded
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Initialize Alpaca client
 def _get_trading_client() -> TradingClient:
@@ -108,15 +111,6 @@ def place_market_order(symbol: str, qty: float, side: str) -> Dict[str, Any]:
         'symbol': order.symbol,
         'status': order.status.value
     }
-
-def cancel_order(order_id: str) -> bool:
-    """Cancel an order"""
-    client = _get_trading_client()
-    try:
-        client.cancel_order_by_id(order_id)
-        return True
-    except Exception:
-        return False
 
 def get_market_clock() -> Dict[str, Any]:
     """Get market clock information from Alpaca"""
@@ -404,7 +398,7 @@ def get_intraday_bars(symbol: str, timeframe: str = "5Min", limit: int = 24) -> 
         
         return result
     except Exception as e:
-        # Return empty list on error
+        logger.error(f"Error getting intraday bars for {symbol}: {e}")
         return []
 
 
@@ -452,5 +446,5 @@ def get_daily_bars(symbol: str, limit: int = 60) -> List[Dict[str, Any]]:
         
         return result
     except Exception as e:
-        # Return empty list on error
+        logger.error(f"Error getting daily bars for {symbol}: {e}")
         return []

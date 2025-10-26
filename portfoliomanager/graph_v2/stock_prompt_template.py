@@ -19,6 +19,33 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# ==================== Exit Strategy Guidance ====================
+
+EXIT_STRATEGY_GUIDANCE = """
+BRACKET ORDER REQUIREMENTS:
+===========================
+Every BUY must use place_bracket_order with stop-loss & take-profit.
+
+Example:
+place_bracket_order(
+    symbol="AAPL",
+    notional=5000,              # Dollar amount to invest
+    side="buy",
+    type="market",
+    stop_loss_price=171.00,     # Entry × 0.95 (-5%)
+    take_profit_price=198.00    # Entry × 1.10 (+10%)
+)
+
+CALCULATION:
+Entry: $180.00
+Stop-Loss (-5%): $180 × 0.95 = $171.00
+Take-Profit (+10%): $180 × 1.10 = $198.00
+
+RULES:
+- NEVER place orders without exits
+"""
+
+
 def generate_stock_portfolio_prompt(
     state: Dict[str, Any],
     iteration_count: int = 0,
@@ -455,7 +482,7 @@ def generate_stock_trading_prompt_with_live_data(
             )
             
             # Calculate indicators
-            from .indicators import calculate_ema, calculate_macd, calculate_rsi, calculate_atr
+            # Functions are defined at the bottom of this file
             
             # Intraday indicators (on 5-min bars)
             intraday_closes = [bar['close'] for bar in intraday_bars]
@@ -595,7 +622,7 @@ def calculate_ema(prices: List[float], period: int = 20) -> List[float]:
     if len(prices) < period:
         return []
     
-    ema_values = []
+    ema_values: list[float] = []
     multiplier = 2 / (period + 1)
     
     # Start with SMA
@@ -635,7 +662,7 @@ def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
     if len(prices) < period + 1:
         return []
     
-    rsi_values = []
+    rsi_values: list[float] = []
     
     # Calculate price changes
     changes = [prices[i] - prices[i-1] for i in range(1, len(prices))]
@@ -649,7 +676,7 @@ def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
         avg_loss = sum(losses) / period
         
         if avg_loss == 0:
-            rsi = 100
+            rsi = 100.0
         else:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
@@ -669,7 +696,7 @@ def calculate_atr(
     if len(highs) < period + 1:
         return 0.0
     
-    true_ranges = []
+    true_ranges: list[float] = []
     
     for i in range(1, len(highs)):
         high_low = highs[i] - lows[i]

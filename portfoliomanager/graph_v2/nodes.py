@@ -28,6 +28,53 @@ from portfoliomanager.dataflows.s3_client import S3ReportManager
 logger = logging.getLogger(__name__)
 
 
+def get_model_tag(llm) -> str:
+    """
+    Get a formatted model tag for logging LLM responses.
+    
+    Returns:
+        str: Formatted tag like "[GPT-4o-mini]" or "[Ollama gpt-oss:20b]"
+    """
+    try:
+        # Try different attributes where model name might be stored
+        model_name = None
+        if hasattr(llm, 'model'):
+            model_name = llm.model
+        elif hasattr(llm, 'model_name'):
+            model_name = llm.model_name
+        elif hasattr(llm, 'model_id'):
+            model_name = llm.model_id
+        
+        if not model_name:
+            return "[LLM]"
+        
+        # Detect provider and format accordingly
+        model_lower = model_name.lower()
+        
+        # Format OpenAI models
+        if any(x in model_lower for x in ["gpt-", "o1-", "o3-"]):
+            # Capitalize GPT models nicely
+            return f"[{model_name.upper()}]"
+        
+        # Format Ollama models
+        if any(x in model_lower for x in ["llama", "mistral", "mixtral", "phi", "gemma", 
+                                           "qwen", "vicuna", "wizardlm", "orca", "deepseek", "gpt-oss"]):
+            return f"[Ollama {model_name}]"
+        
+        # Format Anthropic models
+        if "claude" in model_lower:
+            return f"[{model_name}]"
+        
+        # Format Google models
+        if any(x in model_lower for x in ["gemini", "palm"]):
+            return f"[{model_name}]"
+        
+        # Default formatting
+        return f"[{model_name}]"
+    except Exception:
+        return "[LLM]"
+
+
 # ==================== Portfolio Assessment ====================
 
 def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
@@ -51,7 +98,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with portfolio snapshot, last summary, and recently analyzed stocks
     """
-    logger.info("📊 [ASSESS] Gathering portfolio information...")
+    logger.info("[SYSTEM] 📊 [ASSESS] Gathering portfolio information...")
     
     try:
         # ==================== STEP 1: CHECK MARKET CLOCK FIRST ====================
@@ -65,22 +112,18 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
             get_alpaca_market_clock
         )
         
-        logger.info("🕐 [STEP 1/4] Checking market status...")
+        logger.info("[SYSTEM] 🕐 [STEP 1/4] Checking market status...")
         market_clock = {}
         try:
             market_clock = get_alpaca_market_clock()
             is_open = market_clock.get('is_open', False)
             
             if is_open:
-                logger.info("✅ Market is OPEN - proceeding with portfolio assessment")
+                logger.info("[SYSTEM] ✅ Market is OPEN - proceeding with portfolio assessment")
             else:
                 next_open = market_clock.get('next_open', 'Unknown')
-                logger.warning("=" * 70)
-                logger.warning("🚫 MARKET IS CLOSED")
-                logger.warning("=" * 70)
-                logger.warning(f"Next market open: {next_open}")
-                logger.warning("Skipping portfolio assessment - no trading possible")
-                logger.warning("=" * 70)
+                logger.info("[SYSTEM] 🚫 MARKET IS CLOSED")
+               
                 
                 # Return early with market closed status
                 return {
@@ -93,7 +136,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
                     "last_summary": ""
                 }
         except Exception as e:
-            logger.error(f"❌ Could not fetch market clock: {e}")
+            logger.error(f"[SYSTEM] ❌ Could not fetch market clock: {e}")
             # If we can't check market status, fail fast
             return {
                 "phase": "error",
@@ -114,50 +157,50 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
         # Fetch last iteration summary from S3 (ALWAYS, even when running locally)
         last_summary = ""
         if not s3_bucket:
-            logger.error("❌ S3 bucket not configured! S3 operations are REQUIRED.")
+            logger.error("[SYSTEM] ❌ S3 bucket not configured! S3 operations are REQUIRED.")
             raise ValueError("S3_BUCKET_NAME must be configured in environment variables")
         
         try:
-            logger.info("📜 [STEP 2/4] Fetching last iteration summary from S3...")
+            logger.info("[SYSTEM] 📜 [STEP 2/4] Fetching last iteration summary from S3...")
             s3_manager = S3ReportManager(s3_bucket, s3_region)
             last_summary = s3_manager.get_last_summary() or ""
             
             if last_summary:
-                logger.info("=" * 70)
-                logger.info("📜 LAST ITERATION SUMMARY")
-                logger.info("=" * 70)
-                logger.info(last_summary)
-                logger.info("=" * 70)
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info("[SYSTEM] 📜 LAST ITERATION SUMMARY")
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info("[SYSTEM] " + last_summary)
+                logger.info("[SYSTEM] " + "=" * 70)
             else:
-                logger.info("ℹ️  No previous summary found (first run)")
+                logger.info("[SYSTEM] ℹ️  No previous summary found (first run)")
         except Exception as e:
-            logger.warning(f"Could not fetch last summary from S3: {e}")
+            logger.warning(f"[SYSTEM] Could not fetch last summary from S3: {e}")
         
         # ==================== STEP 3: FETCH PORTFOLIO DATA ====================
         
-        logger.info("📊 [STEP 3/4] Fetching portfolio data from Alpaca...")
+        logger.info("[SYSTEM] 📊 [STEP 3/4] Fetching portfolio data from Alpaca...")
         
         # Get account information
-        logger.info("  💰 Fetching account info...")
+        logger.info("[SYSTEM]   💰 Fetching account info...")
         account_info = get_alpaca_account_info()
-        logger.info(f"     Cash: ${account_info.get('cash', 0):,.2f}")
-        logger.info(f"     Portfolio Value: ${account_info.get('portfolio_value', 0):,.2f}")
-        logger.info(f"     Buying Power: ${account_info.get('buying_power', 0):,.2f}")
+        logger.info(f"[SYSTEM]      Cash: ${account_info.get('cash', 0):,.2f}")
+        logger.info(f"[SYSTEM]      Portfolio Value: ${account_info.get('portfolio_value', 0):,.2f}")
+        logger.info(f"[SYSTEM]      Buying Power: ${account_info.get('buying_power', 0):,.2f}")
         
         # Get current positions
-        logger.info("  📈 Fetching positions...")
+        logger.info("[SYSTEM]   📈 Fetching positions...")
         positions = get_alpaca_positions()
-        logger.info(f"     Found {len(positions)} positions")
+        logger.info(f"[SYSTEM]      Found {len(positions)} positions")
         for pos in positions:
-            logger.info(f"       {pos['ticker']}: {pos['qty']} shares @ ${pos['current_price']:.2f}, "
+            logger.info(f"[SYSTEM]        {pos['ticker']}: {pos['qty']} shares @ ${pos['current_price']:.2f}, "
                        f"P&L: {pos['unrealized_pl_pct']:+.1f}%")
         
         # Get open orders
-        logger.info("  📋 Fetching open orders...")
+        logger.info("[SYSTEM]   📋 Fetching open orders...")
         open_orders = get_alpaca_open_orders()
-        logger.info(f"     Found {len(open_orders)} open orders")
+        logger.info(f"[SYSTEM]      Found {len(open_orders)} open orders")
         for order in open_orders:
-            logger.info(f"       {order['side']} {order['ticker']}: {order['qty']} shares ({order['status']})")
+            logger.info(f"[SYSTEM]        {order['side']} {order['ticker']}: {order['qty']} shares ({order['status']})")
         
         # Format positions for state (convert to format expected by downstream nodes)
         formatted_positions = []
@@ -172,7 +215,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
                 'unrealized_pl': pos['unrealized_pl']
             })
         
-        logger.info("✅ [STEP 4/4] Portfolio data fetched successfully")
+        logger.info("[SYSTEM] ✅ [STEP 4/4] Portfolio data fetched successfully")
         
         return {
             "phase": "assess",
@@ -185,7 +228,7 @@ def assess_portfolio_node(state: PortfolioState) -> Dict[str, Any]:
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.error(f"❌ Error assessing portfolio: {e}", exc_info=True)
+        logger.error(f"[SYSTEM] ❌ Error assessing portfolio: {e}", exc_info=True)
         return {
             "phase": "error",
             "error": str(e)
@@ -210,7 +253,7 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with executed trades
     """
-    logger.info("💭 [DECIDE & EXECUTE] Making trading decisions with full tool access...")
+    logger.info("[SYSTEM] 💭 [DECIDE & EXECUTE] Making trading decisions with full tool access...")
     
     try:
         # Check if market is closed - skip trading if so
@@ -225,7 +268,7 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
         # Check if there was an error in assessment
         if phase == "error":
             error_msg = state.get("error", "Unknown error in assessment")
-            logger.error(f"❌ Cannot make decisions due to error: {error_msg}")
+            logger.error(f"[SYSTEM] ❌ Cannot make decisions due to error: {error_msg}")
             return {
                 "phase": "error",
                 "executed_trades": []
@@ -234,7 +277,7 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
         config = state.get("config", {})
         
         # Import exit strategy and stock template (only in this node to save tokens)
-        from .exit_strategy_manager import EXIT_STRATEGY_GUIDANCE
+        from .stock_prompt_template import EXIT_STRATEGY_GUIDANCE
         from .stock_prompt_template import generate_stock_portfolio_prompt
         
         # Get LLM with function calling capabilities
@@ -304,7 +347,8 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
         
         # Make ONE LLM call - it can request multiple tool calls in parallel
         # This runs every minute, so no need for loops
-        logger.info("🤖 LLM is analyzing portfolio and making trading decisions...")
+        model_tag = get_model_tag(llm)
+        logger.info(f"[SYSTEM] 🤖 {model_tag} is analyzing portfolio and making trading decisions...")
         
         # First call: LLM analyzes and decides on actions
         response = llm_with_tools.invoke(messages)
@@ -312,7 +356,7 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
         
         # Execute any tool calls requested by the LLM
         if hasattr(response, 'tool_calls') and response.tool_calls:
-            logger.info(f"🔧 LLM requested {len(response.tool_calls)} tool call(s)")
+            logger.info(f"[SYSTEM] 🔧 LLM requested {len(response.tool_calls)} tool call(s)")
             
             from langchain_core.messages import ToolMessage
             
@@ -324,7 +368,7 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                 
                 # Log the tool call
                 args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items()])
-                logger.info(f"  🔧 Calling: {tool_name}({args_str})")
+                logger.info(f"[SYSTEM]   🔧 Calling: {tool_name}({args_str})")
                 
                 # Find and execute the tool
                 matching_tools = [t for t in safe_tools if t.name == tool_name]
@@ -334,7 +378,7 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                     try:
                         # Execute tool
                         result = tool.invoke(tool_args)
-                        logger.info(f"  ✅ {tool_name} result: {str(result)[:200]}...")
+                        logger.info(f"[SYSTEM]   ✅ {tool_name} result: {str(result)[:200]}...")
                         
                         # Track trade executions (only place_bracket_order is allowed)
                         if tool_name == 'place_bracket_order':
@@ -359,7 +403,7 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                         
                     except Exception as e:
                         error_msg = f"Error executing {tool_name}: {str(e)}"
-                        logger.error(f"  ❌ {error_msg}")
+                        logger.error(f"[SYSTEM]   ❌ {error_msg}")
                         
                         # Add error to messages
                         messages.append(ToolMessage(
@@ -367,19 +411,19 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                             tool_call_id=tool_id
                         ))
                 else:
-                    logger.warning(f"  ⚠️  Tool {tool_name} not found")
+                    logger.warning(f"[SYSTEM]   ⚠️  Tool {tool_name} not found")
             
             # Give LLM one final call to summarize what it did
             final_response = llm_with_tools.invoke(messages)
             if final_response.content:
-                logger.info(f"🤖 Summary: {final_response.content}")
+                logger.info(f"{model_tag} Summary: {final_response.content}")
         else:
             # No tool calls - LLM decided to hold/do nothing
             if response.content:
-                logger.info(f"🤖 Decision: {response.content}")
-            logger.info("✅ No trades executed this minute")
+                logger.info(f"{model_tag} Decision: {response.content}")
+            logger.info("[SYSTEM] ✅ No trades executed this minute")
         
-        logger.info(f"✅ Executed {len(executed_trades)} trade operations")
+        logger.info(f"[SYSTEM] ✅ Executed {len(executed_trades)} trade operations")
         
         return {
             "executed_trades": executed_trades,
@@ -389,7 +433,7 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.error(f"❌ Error in decision making: {e}", exc_info=True)
+        logger.error(f"[SYSTEM] ❌ Error in decision making: {e}", exc_info=True)
         return {
             "executed_trades": [],
             "phase": "execute",
@@ -416,7 +460,7 @@ def update_summary_node(state: PortfolioState) -> Dict[str, Any]:
     Returns:
         State updates with completion status
     """
-    logger.info("📝 [SUMMARY] Updating agent memory...")
+    logger.info("[SYSTEM] 📝 [SUMMARY] Updating agent memory...")
     
     try:
         # Check if market was closed - skip summary creation entirely
@@ -425,8 +469,8 @@ def update_summary_node(state: PortfolioState) -> Dict[str, Any]:
             market_clock = state.get("market_clock", {})
             next_open = market_clock.get("next_open", "Unknown")
             
-            logger.warning("🚫 Market was closed - skipping summary creation")
-            logger.info("📝 No summary will be saved (market closed)")
+            logger.info("[SYSTEM] 🚫 Market was closed - skipping summary creation")
+            logger.info("[SYSTEM] 📝 No summary will be saved (market closed)")
             
             # Return early without saving anything
             return {
@@ -439,7 +483,7 @@ def update_summary_node(state: PortfolioState) -> Dict[str, Any]:
             error_msg = state.get("error", "Unknown error occurred")
             iteration_id = state.get("iteration_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
             
-            logger.error("❌ Error occurred - creating error summary")
+            logger.error("[SYSTEM] ❌ Error occurred - creating error summary")
             
             summary = f"""ERROR SUMMARY
 Run Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -458,7 +502,7 @@ Next Steps: Check logs and fix the issue before running again
             s3_region = config.get("s3_region", "us-east-1")
             
             if not s3_bucket:
-                logger.error("❌ S3 bucket not configured! Cannot save error summary.")
+                logger.error("[SYSTEM] ❌ S3 bucket not configured! Cannot save error summary.")
                 return {
                     "phase": "complete",
                     "summary": summary,
@@ -470,10 +514,10 @@ Next Steps: Check logs and fix the issue before running again
             try:
                 s3_manager = S3ReportManager(s3_bucket, s3_region)
                 s3_manager.save_summary(summary, iteration_id)
-                logger.info("✅ Error summary saved to S3")
-                logger.info(f"📁 S3 Path: s3://{s3_bucket}/portfolio_manager/summaries/")
+                logger.info("[SYSTEM] ✅ Error summary saved to S3")
+                logger.info(f"[SYSTEM] 📁 S3 Path: s3://{s3_bucket}/portfolio_manager/summaries/")
             except Exception as e:
-                logger.error(f"❌ Failed to save error summary to S3: {e}")
+                logger.error(f"[SYSTEM] ❌ Failed to save error summary to S3: {e}")
             
             return {
                 "phase": "complete",
@@ -488,7 +532,7 @@ Next Steps: Check logs and fix the issue before running again
         
         # S3 operations are REQUIRED, even when running locally
         if not s3_bucket:
-            logger.error("❌ S3 bucket not configured! S3 operations are REQUIRED.")
+            logger.error("[SYSTEM] ❌ S3 bucket not configured! S3 operations are REQUIRED.")
             raise ValueError("S3_BUCKET_NAME must be configured in environment variables")
         
         s3_manager = S3ReportManager(s3_bucket, s3_region)
@@ -551,19 +595,20 @@ Keep it concise but informative. This is the agent's memory for continuity."""
         # Generate summary using LLM
         from shared.llm_factory import get_quick_llm
         llm = get_quick_llm(config)
+        model_tag = get_model_tag(llm)
         response = llm.invoke([HumanMessage(content=summary_prompt)])
         summary = str(response.content)
         
         # Print summary
-        logger.info("=" * 70)
-        logger.info("📊 AGENT MEMORY UPDATE")
-        logger.info("=" * 70)
-        logger.info(summary)
-        logger.info("=" * 70)
+        logger.info("[SYSTEM] " + "=" * 70)
+        logger.info(f"{model_tag} 📊 AGENT MEMORY UPDATE")
+        logger.info("[SYSTEM] " + "=" * 70)
+        logger.info(f"{model_tag} {summary}")
+        logger.info("[SYSTEM] " + "=" * 70)
         
         # Save to S3
         s3_manager.save_summary(summary, iteration_id)
-        logger.info(f"✅ Updated agent memory in S3 (Run #{run_count})")
+        logger.info(f"[SYSTEM] ✅ Updated agent memory in S3 (Run #{run_count})")
         
         return {
             "phase": "complete",
@@ -571,7 +616,7 @@ Keep it concise but informative. This is the agent's memory for continuity."""
         }
         
     except Exception as e:
-        logger.error(f"❌ Error updating summary: {e}", exc_info=True)
+        logger.error(f"[SYSTEM] ❌ Error updating summary: {e}", exc_info=True)
         return {
             "phase": "complete",
             "error": str(e)
