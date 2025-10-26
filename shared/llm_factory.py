@@ -152,6 +152,14 @@ def _create_openai_llm(
     """Create OpenAI LLM instance."""
     from langchain_openai import ChatOpenAI
     
+    # Check if API key is available
+    if not os.getenv("OPENAI_API_KEY") and not kwargs.get("api_key"):
+        raise ValueError(
+            "OpenAI API key is required but not found. "
+            "Please set the OPENAI_API_KEY environment variable or "
+            "set LLM_PROVIDER=ollama to use Ollama instead (requires Ollama to be running locally)."
+        )
+    
     llm_kwargs = {
         "model": model_name,
         "temperature": temperature,

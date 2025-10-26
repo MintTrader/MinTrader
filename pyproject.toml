@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "tradingagents"
+name = "mintrader"
 version = "0.1.0"
-description = "Multi-Agents LLM Financial Trading Framework"
-authors = ["TradingAgents Team <yijia.xiao@cs.ucla.edu>"]
+description = "LangGraph-based Autonomous Portfolio Management System"
+authors = ["MinTrader Team"]
 readme = "README.md"
 homepage = "https://github.com/TauricResearch"
-repository = "https://github.com/TauricResearch/TradingAgents"
+repository = "https://github.com/TauricResearch/MinTrader"
 license = "Apache-2.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -19,8 +19,6 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 packages = [
-    { include = "tradingagents" },
-    { include = "cli" },
     { include = "portfoliomanager" },
     { include = "shared" },
 ]
@@ -73,7 +71,6 @@ alpaca-mcp-server = "^1.0.0"
 # Add development dependencies here if needed
 
 [tool.poetry.scripts]
-tradingagents = "cli.main:main"
 portfoliomanager = "portfoliomanager.main:main"
 
 [build-system]

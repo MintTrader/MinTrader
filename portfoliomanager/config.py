@@ -4,28 +4,84 @@ Portfolio Manager Configuration
 Configuration settings for the autonomous portfolio management system.
 
 Environment Variables for LLM Configuration:
-- LLM_MODEL: Primary model to use (default: gpt-4o-mini)
-- LLM_PROVIDER: Provider name (openai, ollama, anthropic) - auto-detected if not set
+- LLM_PROVIDER: Explicitly set provider (openai, ollama, anthropic)
+  * If not set, automatically detects:
+    - Uses OpenAI if OPENAI_API_KEY exists
+    - Otherwise defaults to Ollama (for local development)
+- LLM_MODEL: Primary model to use
+  * Default for OpenAI: gpt-4o-mini
+  * Default for Ollama: gpt-oss:20b
+- OPENAI_API_KEY: Your OpenAI API key (only required if using OpenAI)
 - OLLAMA_BASE_URL: Ollama server URL (default: http://localhost:11434)
+- BACKEND_URL: Custom API endpoint URL (optional)
+
+Environment Variables for S3 Configuration (REQUIRED):
+- S3_BUCKET_NAME: S3 bucket name (default: mintrader-reports)
+- S3_REGION: AWS region (default: us-east-1)
+- AWS_ACCESS_KEY_ID: AWS access key
+- AWS_SECRET_ACCESS_KEY: AWS secret key
+Note: S3 is REQUIRED for both local and production deployments.
+The system always fetches from and uploads to S3 for state management.
 
 Environment Variables for LangSmith Tracing:
 - LANGSMITH_TRACING: Enable tracing (true/false)
 - LANGSMITH_API_KEY: Your LangSmith API key
 - LANGSMITH_WORKSPACE_ID: Optional workspace ID
 - LANGSMITH_PROJECT: Optional project name (default: "default")
+
+Local Development (Ollama):
+  Just run `ollama serve` and the system will auto-detect to use Ollama.
+  No API keys required!
+  But you MUST configure S3 credentials for state management.
+
+Production/Cloud Deployment:
+  Set OPENAI_API_KEY environment variable to use OpenAI.
+  S3 credentials are required for state management.
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file BEFORE reading any os.getenv() calls
+load_dotenv()
+
+def _get_default_provider():
+    """
+    Auto-detect LLM provider based on environment.
+    - If LLM_PROVIDER is explicitly set, use that
+    - If OPENAI_API_KEY exists, use OpenAI
+    - Otherwise, default to Ollama (for local development)
+    """
+    if os.getenv("LLM_PROVIDER"):
+        return os.getenv("LLM_PROVIDER")
+    
+    # If OpenAI key exists, use OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    
+    # Default to Ollama for local development (no API key required)
+    return "ollama"
+
+def _get_default_model(provider):
+    """Get default model based on provider."""
+    if provider == "ollama":
+        return os.getenv("LLM_MODEL", "gpt-oss:20b")
+    else:
+        return os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+_DEFAULT_PROVIDER = _get_default_provider()
+_DEFAULT_MODEL = _get_default_model(_DEFAULT_PROVIDER)
 
 PORTFOLIO_CONFIG = {
     # LLM Settings
     # Note: Agents require tool-calling support. Ollama models with tool support work great!
     # In production (Render), use OpenAI. Locally, use Ollama.
-    "llm_model": os.getenv("AGENT_LLM_MODEL") or os.getenv("LLM_MODEL", "gpt-4o-mini"),  # Agent LLM (ReAct, tool calling)
-    "llm_provider": os.getenv("LLM_PROVIDER", "openai"),    # Default to openai for cloud deployment
+    "llm_model": os.getenv("AGENT_LLM_MODEL") or _DEFAULT_MODEL,  # Agent LLM (ReAct, tool calling)
+    "llm_provider": _DEFAULT_PROVIDER,    # Auto-detected: OpenAI if key exists, else Ollama
     "backend_url": os.getenv("BACKEND_URL"),  # Optional: Only set if using custom endpoint
     
-    # S3 Settings
+    # S3 Settings - REQUIRED (even for local development)
+    # The system always fetches from and uploads to S3 for continuity and state management
     "s3_bucket_name": os.getenv("S3_BUCKET_NAME", "mintrader-reports"),
     "s3_region": os.getenv("S3_REGION", "us-east-1"),
     
@@ -80,10 +136,10 @@ PORTFOLIO_CONFIG = {
         "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", "./results"),
         "data_cache_dir": os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "tradingagents/dataflows/data_cache"),
         
-        # Use OpenAI for cloud deployment (Ollama for local development)
-        "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
-        "deep_think_llm": os.getenv("LLM_MODEL", "gpt-4o-mini"),
-        "quick_think_llm": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        # Use auto-detected provider (OpenAI if key exists, else Ollama)
+        "llm_provider": _DEFAULT_PROVIDER,
+        "deep_think_llm": _DEFAULT_MODEL,
+        "quick_think_llm": _DEFAULT_MODEL,
         "backend_url": os.getenv("BACKEND_URL"),
         
         # Minimize debate rounds to reduce LLM calls

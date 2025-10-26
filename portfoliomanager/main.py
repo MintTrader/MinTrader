@@ -127,7 +127,6 @@ def run_portfolio_manager(config, mode, stream=False):
     logger.info("="*60)
     logger.info(f"✨ Architecture: Graph-based with MCP tools")
     logger.info(f"🤖 Decision Making: Fully autonomous")
-    logger.info(f"📊 Max Analyses per Iteration: {config.get('max_stocks_to_analyze', 3)}")
     logger.info("="*60)
     
     if mode == 'scheduled':
@@ -149,23 +148,30 @@ def run_portfolio_manager(config, mode, stream=False):
         logger.info("="*60)
         logger.info(f"✅ Iteration ID: {result['iteration_id']}")
         logger.info(f"✅ Phase: {result['phase']}")
-        logger.info(f"✅ Stocks Analyzed: {len(result.get('analysis_results', {}))}")
-        logger.info(f"✅ Trades Executed: {len(result.get('executed_trades', []))}")
         
-        if result.get('executed_trades'):
-            logger.info("📋 Executed Trades:")
-            for trade in result['executed_trades']:
-                status = trade.get('status', 'unknown')
-                ticker = trade.get('ticker')
-                action = trade.get('action')
-                
-                if status == 'submitted':
-                    logger.info(f"  ✅ {action} {ticker} - Order ID: {trade.get('order_id')}")
-                else:
-                    logger.error(f"  ❌ {action} {ticker} - Error: {trade.get('error', 'Unknown')}")
-        
-        if result.get('error'):
+        # Check if market was closed
+        if result['phase'] == 'market_closed':
+            logger.warning("🚫 MARKET IS CLOSED")
+            logger.warning(f"⏰ {result.get('error', 'Market is currently closed')}")
+            logger.warning("📌 No trading operations performed")
+            logger.warning("🔄 Run again when market is open")
+        elif result.get('error'):
             logger.error(f"⚠️  Error: {result['error']}")
+        else:
+            # Normal execution - show trade results
+            logger.info(f"✅ Trades Executed: {len(result.get('executed_trades', []))}")
+            
+            if result.get('executed_trades'):
+                logger.info("📋 Executed Trades:")
+                for trade in result['executed_trades']:
+                    status = trade.get('status', 'unknown')
+                    ticker = trade.get('ticker')
+                    action = trade.get('action')
+                    
+                    if status == 'submitted':
+                        logger.info(f"  ✅ {action} {ticker} - Order ID: {trade.get('order_id')}")
+                    else:
+                        logger.error(f"  ❌ {action} {ticker} - Error: {trade.get('error', 'Unknown')}")
         
         logger.info("="*60)
         logger.info("✅ Iteration complete!")

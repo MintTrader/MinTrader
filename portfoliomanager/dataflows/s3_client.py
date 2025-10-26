@@ -31,13 +31,20 @@ class S3ReportManager:
         self.bucket_name = bucket_name
         self.region = region
         
+        # Check if credentials are available
+        aws_key = os.getenv('AWS_ACCESS_KEY_ID')
+        aws_secret = os.getenv('AWS_SECRET_ACCESS_KEY')
+    
+        
         # Initialize boto3 client
         self.s3_client = boto3.client(
             's3',
             region_name=region,
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+            aws_access_key_id=aws_key,
+            aws_secret_access_key=aws_secret
         )
+        
+        logger.info(f"S3 client initialized for bucket '{bucket_name}' in region '{region}'")
         
         # Ensure bucket exists
         self._ensure_bucket_exists()
@@ -144,18 +151,32 @@ class S3ReportManager:
         """
         try:
             s3_key = "summaries/latest.txt"
+            logger.info(f"Attempting to fetch summary from s3://{self.bucket_name}/{s3_key}")
             response = self.s3_client.get_object(
                 Bucket=self.bucket_name,
                 Key=s3_key
             )
             summary = response['Body'].read().decode('utf-8')
+            logger.info("Successfully retrieved last summary from S3")
             return summary
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
+                logger.info("No previous summary found (this is OK for first run)")
                 return None
-            logger.error(f"Error retrieving last summary: {e}")
+            elif error_code == 'AccessDenied':
+                logger.error(f"Access Denied to S3 bucket '{self.bucket_name}'")
+                logger.error("Please verify:")
+                logger.error("  1. AWS credentials are correct and loaded")
+                logger.error("  2. IAM user has s3:GetObject permission")
+                logger.error(f"  3. Bucket '{self.bucket_name}' exists in region '{self.region}'")
+                logger.error(f"  4. Bucket policy allows access from your IAM user")
+            else:
+                logger.error(f"Error retrieving last summary (code: {error_code}): {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error retrieving last summary: {e}")
             return None
     
     def save_summary(self, summary: str, iteration_id: str) -> bool:

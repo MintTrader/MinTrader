@@ -16,13 +16,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from .state import PortfolioState
 from .nodes import (
     assess_portfolio_node,
-    select_stocks_node,
-    analyze_stocks_node,
     make_decisions_node,
-    execute_trades_node,
-    upload_results_to_s3_node,
-    should_analyze_stocks,
-    should_execute_trades
+    update_summary_node
 )
 
 
@@ -30,19 +25,41 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     """
     Create and compile the portfolio management graph.
     
-    Workflow:
-    1. START → assess_portfolio: Get current portfolio state + fetch recently analyzed from S3
-    2. assess_portfolio → select_stocks: Research market & select stocks (unified)
-    3. select_stocks → [conditional]:
-       - If stocks selected → analyze_stocks
-       - If no stocks → make_decisions
-    4. analyze_stocks → make_decisions: LLM makes decisions AND executes trades autonomously
-       (using OpenAI function calling with full Alpaca MCP tool access)
-    5. make_decisions → upload_to_s3: Upload results, summary, and logs to S3
-    6. upload_to_s3 → END
+    Smart 3-Step Workflow with Market Check:
+    =========================================
     
-    Note: The make_decisions node now directly executes trades using OpenAI function calling
-          with all available Alpaca MCP tools. The separate execute_trades node is no longer used.
+    1. GET PORTFOLIO STATE (assess_portfolio)
+       - Fetch current account info, positions, orders, market clock
+       - Load last summary from S3 (agent's memory from previous run)
+       - Provides context: portfolio state + memory
+       - **KEY**: Checks if market is open first - returns early if closed
+    
+    2. DECIDE & EXECUTE BRACKET ORDERS (make_decisions) [SKIPPED IF MARKET CLOSED]
+       - LLM reviews portfolio state and available cash
+       - Makes autonomous trading decisions
+       - Executes bracket orders (with stop-loss & take-profit)
+       - Uses OpenAI function calling with safe Alpaca MCP tools
+       - Only runs when market is open
+    
+    3. UPDATE SUMMARY (update_summary)
+       - Generate summary of what happened this run
+       - Track run count, timing, trades executed
+       - Save to S3 as agent's memory for next run
+       - Memory provides continuity across runs
+       - Creates special "market closed" summary when appropriate
+    
+    Memory System:
+    ==============
+    The last_summary serves as the agent's memory:
+    - Pulled at start of each run (step 1)
+    - Updated at end of each run (step 3)
+    - Tracks: run count, portfolio changes, market context, next steps
+    - Enables context generation for stock analysis
+    
+    Conditional Routing:
+    ====================
+    - If market is OPEN: assess_portfolio -> make_decisions -> update_summary -> END
+    - If market is CLOSED: assess_portfolio -> update_summary -> END
     
     Args:
         config: Portfolio configuration dict
@@ -54,7 +71,7 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     Example:
         >>> graph = create_portfolio_graph(PORTFOLIO_CONFIG)
         >>> initial_state = {
-        ...     "iteration_id": "20251022_120000",
+        ...     "iteration_id": "20251026_120000",
         ...     "config": PORTFOLIO_CONFIG,
         ...     "phase": "init",
         ...     "messages": []
@@ -65,39 +82,44 @@ def create_portfolio_graph(config: dict, enable_checkpointing: bool = True):
     # Create graph with state schema
     workflow = StateGraph(PortfolioState)
     
-    # Add all nodes
+    # Add 3 nodes
     workflow.add_node("assess_portfolio", assess_portfolio_node)
-    workflow.add_node("select_stocks", select_stocks_node)
-    workflow.add_node("analyze_stocks", analyze_stocks_node)
     workflow.add_node("make_decisions", make_decisions_node)
-    # Note: execute_trades_node is deprecated - make_decisions now handles execution
-    workflow.add_node("upload_to_s3", upload_results_to_s3_node)
+    workflow.add_node("update_summary", update_summary_node)
     
-    # Define edges
-    # START → assess portfolio
+    # Define conditional routing function
+    def should_trade(state: PortfolioState) -> str:
+        """
+        Decide whether to proceed with trading based on market status.
+        
+        Returns:
+            - "make_decisions" if market is open
+            - "update_summary" if market is closed or error occurred
+        """
+        phase = state.get("phase", "")
+        
+        if phase == "market_closed":
+            return "update_summary"  # Skip trading, go directly to summary
+        elif phase == "error":
+            return "update_summary"  # Skip trading on error, save error summary
+        else:
+            return "make_decisions"  # Market is open, proceed with trading
+    
+    # Define edges with conditional routing
     workflow.add_edge(START, "assess_portfolio")
     
-    # assess → select (select now includes market research)
-    workflow.add_edge("assess_portfolio", "select_stocks")
-    
-    # select → [conditional: analyze or decide]
+    # Conditional: only trade if market is open
     workflow.add_conditional_edges(
-        "select_stocks",
-        should_analyze_stocks,
+        "assess_portfolio",
+        should_trade,
         {
-            "analyze": "analyze_stocks",
-            "decide": "make_decisions"
+            "make_decisions": "make_decisions",
+            "update_summary": "update_summary"
         }
     )
     
-    # analyze → decide (which now also executes)
-    workflow.add_edge("analyze_stocks", "make_decisions")
-    
-    # make_decisions → upload (decisions are executed directly in make_decisions node)
-    workflow.add_edge("make_decisions", "upload_to_s3")
-    
-    # upload → end
-    workflow.add_edge("upload_to_s3", END)
+    workflow.add_edge("make_decisions", "update_summary")
+    workflow.add_edge("update_summary", END)
     
     # Compile with optional checkpointing
     if enable_checkpointing:
@@ -143,15 +165,6 @@ def run_portfolio_iteration(config: dict):
         "config": config,
         "phase": "init",
         "messages": [],
-        "stocks_to_analyze": [],
-        "analysis_results": {},
-        "recently_analyzed": {},
-        "pending_trades": [],
-        "executed_trades": [],
-        "web_search_used": False,
-        "market_context": "",
-        "promising_sectors": [],
-        "growth_stocks": [],
         "last_summary": "",
         "error": None
     }
@@ -215,34 +228,32 @@ async def stream_portfolio_iteration(config: dict):
         
         # Show key information per node
         if node_name == "assess_portfolio":
-            account = node_output.get("account", {})
-            print(f"  💰 Cash: ${account.get('cash', 0):,.2f}")
-            print(f"  📈 Portfolio: ${account.get('portfolio_value', 0):,.2f}")
-        
-        elif node_name == "select_stocks":
-            stocks = node_output.get("stocks_to_analyze", [])
-            sectors = node_output.get("promising_sectors", [])
-            growth = node_output.get("growth_stocks", [])
-            
-            if sectors:
-                print(f"  📈 Identified {len(sectors)} promising sectors")
-            if growth:
-                print(f"  🎯 Identified {len(growth)} growth opportunities")
-            
-            print(f"  ✅ Selected: {stocks if stocks else 'None'}")
-        
-        elif node_name == "analyze_stocks":
-            results = node_output.get("analysis_results", {})
-            for ticker, result in results.items():
-                print(f"  📊 {ticker}: {result.get('recommendation', 'N/A')}")
+            if phase == "market_closed":
+                error_msg = node_output.get("error", "Market is closed")
+                print(f"  🚫 {error_msg}")
+                print(f"  ⏸️  Trading suspended")
+            else:
+                account = node_output.get("account", {})
+                last_summary = node_output.get("last_summary", "")
+                print(f"  💰 Cash: ${account.get('cash', 0):,.2f}")
+                print(f"  📈 Portfolio: ${account.get('portfolio_value', 0):,.2f}")
+                if last_summary:
+                    print(f"  📜 Loaded memory from previous run")
         
         elif node_name == "make_decisions":
-            trades = node_output.get("pending_trades", [])
-            print(f"  💭 Generated {len(trades)} trade decisions")
+            if phase == "market_closed":
+                print(f"  🚫 Skipped (market closed)")
+            else:
+                executed = node_output.get("executed_trades", [])
+                print(f"  ⚡ Executed {len(executed)} trades")
         
-        elif node_name == "execute_trades":
-            executed = node_output.get("executed_trades", [])
-            print(f"  ⚡ Executed {len(executed)} trades")
+        elif node_name == "update_summary":
+            if phase == "complete":
+                run_count = node_output.get("run_count", 1)
+                if run_count > 0:
+                    print(f"  📝 Updated agent memory (Run #{run_count})")
+                else:
+                    print(f"  📝 Market closed summary saved")
     
     print("\n" + "="*60)
     print("✅ Iteration Complete!")
