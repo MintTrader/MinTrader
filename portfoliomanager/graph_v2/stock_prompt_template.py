@@ -65,24 +65,35 @@ def generate_stock_portfolio_prompt(
         Formatted prompt string with all market state and portfolio data
     """
     
-    if start_time is None:
-        start_time = datetime.now()
-    
-    minutes_since_start = int((datetime.now() - start_time).total_seconds() / 60)
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-    
     # Extract state data
     account = state.get("account", {})
     positions = state.get("positions", [])
     market_clock = state.get("market_clock", {})
+    last_summary = state.get("last_summary", "")
+    
+    # Parse start time from last_summary if available
+    if start_time is None and last_summary:
+        import re
+        # Try to extract date from "Run #X - YYYY-MM-DD HH:MM:SS" format in summary
+        match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', last_summary)
+        if match:
+            try:
+                start_time = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+            except:
+                pass
+    
+    if start_time is None:
+        start_time = datetime.now()
+    
+    minutes_since_start = int((datetime.now() - start_time).total_seconds() / 60)
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Calculate portfolio metrics
     portfolio_value = account.get("portfolio_value", 0)
     cash = account.get("cash", 0)
     equity = account.get("equity", 0)
     
-    # Calculate total return (assuming starting value - you may want to track this)
-    # For now, using a placeholder calculation
+    # Calculate total return
     last_equity = account.get("last_equity", portfolio_value)
     total_return_pct = ((portfolio_value - last_equity) / last_equity * 100) if last_equity > 0 else 0.0
     
@@ -94,7 +105,7 @@ def generate_stock_portfolio_prompt(
         f"PORTFOLIO MANAGER STATUS\n"
         f"{'=' * 80}\n"
         f"Current Time: {current_time}\n"
-        f"Run #{iteration_count} ({minutes_since_start} minutes since start)\n"
+        f"Run #{iteration_count} (running for {minutes_since_start} minutes since {start_time.strftime('%H:%M:%S')})\n"
         f"{'=' * 80}"
     )
     
@@ -105,10 +116,8 @@ def generate_stock_portfolio_prompt(
     
     prompt_parts.append(
         f"\nMARKET STATUS\n"
-        f"{'=' * 80}"
-    )
-    prompt_parts.append(
-        f"Market is currently: {'OPEN' if is_open else 'CLOSED'}"
+        f"{'=' * 80}\n"
+        f"Market is currently: {'OPEN ✅' if is_open else 'CLOSED 🚫'}"
     )
     if not is_open:
         prompt_parts.append(f"Next open: {next_open}")
@@ -117,10 +126,21 @@ def generate_stock_portfolio_prompt(
     
     prompt_parts.append("=" * 80)
     
-    # ==================== Current Positions Overview ====================
+    # ==================== Account Summary ====================
+    prompt_parts.append(
+        f"\nACCOUNT SUMMARY\n"
+        f"{'=' * 80}\n"
+        f"Available Cash: ${cash:,.2f}\n"
+        f"Portfolio Value: ${portfolio_value:,.2f}\n"
+        f"Total Equity: ${equity:,.2f}\n"
+        f"Total Return: {total_return_pct:+.2f}%\n"
+        f"{'=' * 80}"
+    )
+    
+    # ==================== Current Positions ====================
     if positions:
         prompt_parts.append(
-            f"\nCURRENT POSITIONS\n"
+            f"\nCURRENT POSITIONS ({len(positions)})\n"
             f"{'=' * 80}"
         )
         for pos in positions:
@@ -140,18 +160,41 @@ def generate_stock_portfolio_prompt(
         prompt_parts.append(
             f"\nCURRENT POSITIONS\n"
             f"{'=' * 80}\n"
-            f"No positions currently held\n"
+            f"No positions currently held - Portfolio is 100% cash\n"
             f"{'=' * 80}"
         )
     
-    # ==================== Account Information ====================
+    # ==================== Last Run Summary ====================
+    if last_summary:
+        prompt_parts.append(
+            f"\nLAST RUN MEMORY\n"
+            f"{'=' * 80}\n"
+            f"{last_summary}\n"
+            f"{'=' * 80}"
+        )
+    
+    # ==================== Market Opportunities Guide ====================
     prompt_parts.append(
-        f"\nACCOUNT SUMMARY\n"
+        f"\nMARKET OPPORTUNITIES\n"
         f"{'=' * 80}\n"
-        f"Available Cash: ${cash:,.2f}\n"
-        f"Portfolio Value: ${portfolio_value:,.2f}\n"
-        f"Total Equity: ${equity:,.2f}\n"
-        f"Total Return: {total_return_pct:+.2f}%\n"
+        f"Use the available tools to find trading opportunities:\n"
+        f"1. get_stock_snapshot(symbol) - Get comprehensive real-time data for any stock\n"
+        f"2. get_stock_quote(symbol) - Get current bid/ask prices\n"
+        f"3. get_stock_bars(symbol, timeframe='5Min', days=1) - Get price history\n"
+        f"\n"
+        f"Consider stocks from major indices:\n"
+        f"- Tech: AAPL, MSFT, GOOGL, META, NVDA, TSLA, AMZN\n"
+        f"- Finance: JPM, BAC, GS, MS, V, MA\n"
+        f"- Healthcare: JNJ, UNH, PFE, ABBV, LLY\n"
+        f"- Consumer: WMT, HD, DIS, NKE, COST\n"
+        f"- Energy: XOM, CVX, COP\n"
+        f"- Or any other stock you find interesting\n"
+        f"\n"
+        f"PROCESS:\n"
+        f"1. Use tools to check real-time prices and trends for stocks\n"
+        f"2. Identify stocks with good momentum or value\n"
+        f"3. Place bracket orders with appropriate stop-loss and take-profit\n"
+        f"4. Aim for positions of ${cash * 0.05:,.2f} - ${cash * 0.10:,.2f} each (5-10% of cash)\n"
         f"{'=' * 80}"
     )
     

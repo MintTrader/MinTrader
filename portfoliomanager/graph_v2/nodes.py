@@ -292,32 +292,25 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
         # Bind safe tools to LLM for native OpenAI function calling
         llm_with_tools = llm.bind_tools(safe_tools)
         
-        # Parse run count and start time from memory
+        # Parse run count from memory
         last_summary = state.get('last_summary', '')
-        iteration_id = state.get("iteration_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
         
         run_count = 1
-        start_time = datetime.now()
         if last_summary and "Run #" in last_summary:
             import re
             match = re.search(r'Run #(\d+)', last_summary)
             if match:
                 run_count = int(match.group(1))
-            
-            # Try to parse start time from iteration_id
-            try:
-                start_time = datetime.strptime(iteration_id, "%Y%m%d_%H%M%S")
-            except:
-                start_time = datetime.now()
         
         # Generate comprehensive stock portfolio prompt with live data
         # Convert state to dict for the prompt generator
+        # Note: start_time will be extracted from last_summary by the prompt generator
         from typing import cast
         state_dict = cast(Dict[str, Any], dict(state))
         stock_context = generate_stock_portfolio_prompt(
             state=state_dict,
             iteration_count=run_count,
-            start_time=start_time
+            start_time=None  # Let prompt template extract from last_summary
         )
         
         # Build tool list for the prompt
@@ -348,23 +341,20 @@ CURRENT PORTFOLIO:
 - Portfolio Value: ${portfolio_value:,.2f}
 - Active Positions: {num_positions}
 
-YOUR TASK THIS MINUTE:
-1. If you have available cash and see good entry opportunities, place BUY bracket orders
-2. Use place_buy_bracket_order() with proper stop-loss and take-profit levels
-3. Look for stocks with:
-   - Strong momentum (EMA trends, MACD signals)
-   - Good risk/reward setups
-   - Reasonable entry prices
-   
-4. You run every minute, so don't overthink - if you see a setup, take it
-5. Bracket orders automatically manage exits - no need to monitor positions
+YOUR WORKFLOW:
+1. ANALYZE: Use get_stock_snapshot() or get_stock_quote() to check stocks
+2. DECIDE: Identify good entry opportunities with momentum
+3. EXECUTE: Call place_buy_bracket_order() to place trades
+4. CONFIRM: Summarize what you did
 
-IMPORTANT: 
-- You have REAL trading authority
-- If no good setups exist, that's fine - wait for the next minute
-- But if opportunities are clear, ACT ON THEM
+IMPORTANT:
+- You have REAL trading authority - actually place orders, don't just analyze
+- After analyzing stocks, IMMEDIATELY place bracket orders if they look good
+- Don't say "let's execute" - actually call place_buy_bracket_order()
+- Each position should be 5-10% of cash (${cash_available * 0.05:,.2f} - ${cash_available * 0.10:,.2f})
+- If no opportunities exist, that's fine - wait for next minute
 
-NOW: Review market data and execute any appropriate bracket orders."""
+NOW: Analyze stocks and PLACE bracket orders if opportunities are found."""
         
         # Create messages list for conversation
         messages = [
@@ -375,97 +365,104 @@ NOW: Review market data and execute any appropriate bracket orders."""
         # Track executed trades
         executed_trades = []
         
-        # Make ONE LLM call - it can request multiple tool calls in parallel
-        # This runs every minute, so no need for loops
+        # Let agent make as many tool calls as it needs
+        # Safety limit prevents infinite loops (should never hit this in practice)
         model_tag = get_model_tag(llm)
         logger.info(f"[SYSTEM] 🤖 {model_tag} is analyzing portfolio and making trading decisions...")
         
-        # First call: LLM analyzes and decides on actions
-        response = llm_with_tools.invoke(messages)
-        messages.append(response)
+        from langchain_core.messages import ToolMessage
         
-        # Execute any tool calls requested by the LLM
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            logger.info(f"[SYSTEM] 🔧 LLM requested {len(response.tool_calls)} tool call(s)")
+        max_iterations = 20  # Safety limit to prevent infinite loops
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
             
-            from langchain_core.messages import ToolMessage
+            # Call LLM
+            response = llm_with_tools.invoke(messages)
+            messages.append(response)
             
-            # Execute all tool calls (LLM can request multiple at once)
-            for tool_call in response.tool_calls:
-                tool_name = tool_call.get('name', 'unknown')
-                tool_args = tool_call.get('args', {})
-                tool_id = tool_call.get('id', '')
+            # Check if LLM wants to use tools
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                logger.info(f"[SYSTEM] 🔧 LLM requested {len(response.tool_calls)} tool call(s)")
                 
-                # Log the tool call
-                args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items()])
-                logger.info(f"[SYSTEM]   🔧 Calling: {tool_name}({args_str})")
+                # Execute all tool calls (LLM can request multiple at once)
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.get('name', 'unknown')
+                    tool_args = tool_call.get('args', {})
+                    tool_id = tool_call.get('id', '')
+                    
+                    # Log the tool call
+                    args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items()])
+                    logger.info(f"[SYSTEM]   🔧 Calling: {tool_name}({args_str})")
+                    
+                    # Find and execute the tool
+                    matching_tools = [t for t in safe_tools if t.name == tool_name]
+                    
+                    if matching_tools:
+                        tool = matching_tools[0]
+                        try:
+                            # Execute tool
+                            result = tool.invoke(tool_args)
+                            logger.info(f"[SYSTEM]   ✅ {tool_name} result: {str(result)[:200]}...")
+                            
+                            # Track trade executions (only place_buy_bracket_order is allowed)
+                            if tool_name == 'place_buy_bracket_order':
+                                executed_trades.append({
+                                    'ticker': tool_args.get('symbol', 'UNKNOWN'),
+                                    'action': 'BUY',  # Always BUY since this tool only does BUY orders
+                                    'quantity': tool_args.get('qty', 0),
+                                    'order_value': tool_args.get('notional', 0),
+                                    'order_type': tool_args.get('type', 'market'),
+                                    'stop_loss_price': tool_args.get('stop_loss_price'),
+                                    'take_profit_price': tool_args.get('take_profit_price'),
+                                    'status': 'submitted',
+                                    'executed_at': datetime.now().isoformat(),
+                                    'tool_result': str(result)[:500]
+                                })
+                            
+                            # Add tool result to messages
+                            messages.append(ToolMessage(
+                                content=str(result),
+                                tool_call_id=tool_id
+                            ))
+                            
+                        except Exception as e:
+                            error_msg = f"Error executing {tool_name}: {str(e)}"
+                            logger.error(f"[SYSTEM]   ❌ {error_msg}")
+                            
+                            # Add error to messages
+                            messages.append(ToolMessage(
+                                content=error_msg,
+                                tool_call_id=tool_id
+                            ))
+                    else:
+                        logger.warning(f"[SYSTEM]   ⚠️  Tool {tool_name} not found")
                 
-                # Find and execute the tool
-                matching_tools = [t for t in safe_tools if t.name == tool_name]
-                
-                if matching_tools:
-                    tool = matching_tools[0]
-                    try:
-                        # Execute tool
-                        result = tool.invoke(tool_args)
-                        logger.info(f"[SYSTEM]   ✅ {tool_name} result: {str(result)[:200]}...")
-                        
-                        # Track trade executions (only place_buy_bracket_order is allowed)
-                        if tool_name == 'place_buy_bracket_order':
-                            executed_trades.append({
-                                'ticker': tool_args.get('symbol', 'UNKNOWN'),
-                                'action': 'BUY',  # Always BUY since this tool only does BUY orders
-                                'quantity': tool_args.get('qty', 0),
-                                'order_value': tool_args.get('notional', 0),
-                                'order_type': tool_args.get('type', 'market'),
-                                'stop_loss_price': tool_args.get('stop_loss_price'),
-                                'take_profit_price': tool_args.get('take_profit_price'),
-                                'status': 'submitted',
-                                'executed_at': datetime.now().isoformat(),
-                                'tool_result': str(result)[:500]
-                            })
-                        
-                        # Add tool result to messages
-                        messages.append(ToolMessage(
-                            content=str(result),
-                            tool_call_id=tool_id
-                        ))
-                        
-                    except Exception as e:
-                        error_msg = f"Error executing {tool_name}: {str(e)}"
-                        logger.error(f"[SYSTEM]   ❌ {error_msg}")
-                        
-                        # Add error to messages
-                        messages.append(ToolMessage(
-                            content=error_msg,
-                            tool_call_id=tool_id
-                        ))
-                else:
-                    logger.warning(f"[SYSTEM]   ⚠️  Tool {tool_name} not found")
-            
-            # Give LLM one final call to summarize what it did
-            logger.info(f"[SYSTEM] 💬 Asking {model_tag} to summarize actions...")
-            final_response = llm_with_tools.invoke(messages)
-            
-            if final_response.content:
-                logger.info("[SYSTEM] " + "=" * 70)
-                logger.info(f"[{model_tag}] 📝 RESPONSE AFTER TOOL EXECUTION")
-                logger.info("[SYSTEM] " + "=" * 70)
-                logger.info(f"[{model_tag}] {final_response.content}")
-                logger.info("[SYSTEM] " + "=" * 70)
+                # Continue loop to let LLM decide on next action
+                continue
             else:
-                logger.info(f"[SYSTEM] ℹ️  {model_tag} provided no additional commentary")
-        else:
-            # No tool calls - LLM decided to hold/do nothing
-            if response.content:
-                logger.info("[SYSTEM] " + "=" * 70)
-                logger.info(f"[{model_tag}] 📝 DECISION (NO TRADES)")
-                logger.info("[SYSTEM] " + "=" * 70)
-                logger.info(f"[{model_tag}] {response.content}")
-                logger.info("[SYSTEM] " + "=" * 70)
-            logger.info("[SYSTEM] ✅ No trades executed this minute")
+                # No more tool calls - LLM is done
+                if response.content:
+                    logger.info("[SYSTEM] " + "=" * 70)
+                    logger.info(f"[{model_tag}] 📝 FINAL RESPONSE")
+                    logger.info("[SYSTEM] " + "=" * 70)
+                    logger.info(f"[{model_tag}] {response.content}")
+                    logger.info("[SYSTEM] " + "=" * 70)
+                break
         
-        logger.info(f"[SYSTEM] ✅ Executed {len(executed_trades)} trade operations")
+        if iteration >= max_iterations:
+            logger.warning(f"[SYSTEM] ⚠️  Reached safety limit of {max_iterations} iterations")
+        
+        # Log summary
+        if executed_trades:
+            logger.info(f"[SYSTEM] ✅ Executed {len(executed_trades)} trade operation(s)")
+            for trade in executed_trades:
+                logger.info(f"[SYSTEM]    📈 {trade['action']} {trade['ticker']}: "
+                           f"${trade.get('order_value', 'N/A')} "
+                           f"(SL: ${trade.get('stop_loss_price')}, TP: ${trade.get('take_profit_price')})")
+        else:
+            logger.info("[SYSTEM] ℹ️  No trades executed this minute")
         
         return {
             "executed_trades": executed_trades,
