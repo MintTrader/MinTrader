@@ -36,34 +36,11 @@ class PortfolioState(TypedDict):
     # Open orders
     open_orders: list[dict]  # [{symbol, side, qty, status, ...}]
     
-    # Market status
-    market_status: dict  # {is_open, next_open, next_close, ...}
+    # Market clock/status
+    market_clock: dict  # {is_open, next_open, next_close, ...}
     
-    # ==================== Analysis Tracking ====================
-    # Stocks selected for analysis this iteration
-    stocks_to_analyze: list[str]
-    
-    # Analysis results keyed by ticker
-    # Each result contains: {final_trade_decision, investment_plan, ...}
-    analysis_results: dict[str, dict]
-    
-    # Recently analyzed stocks (past 14 days)
-    recently_analyzed: dict  # {recently_analyzed: [...], total_count: int}
-    
-    # ==================== Market Intelligence ====================
-    # Market context from web search
-    market_context: str
-    
-    # Promising sectors identified in research
-    promising_sectors: list[dict]  # [{sector, rationale, stocks_mentioned}]
-    
-    # Individual growth stocks identified in research
-    growth_stocks: list[dict]  # [{ticker, rationale, sector}]
-    
-    # Whether web search was used this iteration
-    web_search_used: bool
-    
-    # Previous iteration summary
+    # ==================== Agent Memory ====================
+    # Previous iteration summary (agent's memory across runs)
     last_summary: str
     
     # ==================== Trading Decisions ====================
@@ -81,12 +58,10 @@ class PortfolioState(TypedDict):
     phase: Literal[
         "init",
         "assess",
-        "research", 
-        "select",
-        "analyze",
         "decide",
         "execute",
         "complete",
+        "market_closed",
         "error"
     ]
     

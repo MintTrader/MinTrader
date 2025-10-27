@@ -24,16 +24,15 @@ logger = logging.getLogger(__name__)
 EXIT_STRATEGY_GUIDANCE = """
 BRACKET ORDER REQUIREMENTS:
 ===========================
-Every BUY must use place_bracket_order with stop-loss & take-profit.
+Every BUY must use place_buy_bracket_order with mandatory stop-loss & take-profit.
 
 Example:
-place_bracket_order(
+place_buy_bracket_order(
     symbol="AAPL",
-    notional=5000,              # Dollar amount to invest
-    side="buy",
+    notional=5000,                # Dollar amount to invest
     type="market",
-    stop_loss_price=171.00,     # Entry × 0.95 (-5%)
-    take_profit_price=198.00    # Entry × 1.10 (+10%)
+    stop_loss_price=171.00,       # Entry × 0.95 (-5%)
+    take_profit_price=198.00      # Entry × 1.10 (+10%)
 )
 
 CALCULATION:
@@ -41,7 +40,10 @@ Entry: $180.00
 Stop-Loss (-5%): $180 × 0.95 = $171.00
 Take-Profit (+10%): $180 × 1.10 = $198.00
 
-RULES:
+RISK MANAGEMENT:
+- Position size: Use 5-10% of available cash per position
+- Stop-loss: Typically 3-7% below entry
+- Take-profit: Typically 10-20% above entry (aim for 2:1 reward:risk)
 - NEVER place orders without exits
 """
 
@@ -89,23 +91,12 @@ def generate_stock_portfolio_prompt(
     
     # ==================== Header ====================
     prompt_parts.append(
-        f"It has been {minutes_since_start} minutes since you started managing the portfolio. "
-        f"The current time is {current_time} and you've been invoked {iteration_count} times. "
-        f"Below, we are providing you with a variety of state data, price data, and technical signals "
-        f"so you can discover alpha. Below that is your current account information, value, performance, positions, etc.\n"
+        f"PORTFOLIO MANAGER STATUS\n"
+        f"{'=' * 80}\n"
+        f"Current Time: {current_time}\n"
+        f"Run #{iteration_count} ({minutes_since_start} minutes since start)\n"
+        f"{'=' * 80}"
     )
-    
-    prompt_parts.append(
-        "ALL OF THE PRICE OR SIGNAL DATA BELOW IS ORDERED: OLDEST → NEWEST\n"
-    )
-    
-    prompt_parts.append(
-        "Timeframes note: Unless stated otherwise in a section title, "
-        "intraday series are provided at 5-minute intervals. "
-        "If a stock uses a different interval, it is explicitly stated in that stock's section.\n"
-    )
-    
-    prompt_parts.append("=" * 80)
     
     # ==================== Market Status ====================
     is_open = market_clock.get("is_open", False)
@@ -126,260 +117,42 @@ def generate_stock_portfolio_prompt(
     
     prompt_parts.append("=" * 80)
     
-    # ==================== Individual Stock Data ====================
-    prompt_parts.append(
-        f"\nCURRENT MARKET STATE FOR ALL STOCKS IN PORTFOLIO\n"
-        f"{'=' * 80}"
-    )
-    
-    # Get market data for each position
-    # Import alpaca data functions
-    from portfoliomanager.dataflows.alpaca_portfolio import get_intraday_bars, get_daily_bars
-    
-    for position in positions:
-        symbol = position.get("symbol", "UNKNOWN")
-        current_price = position.get("current_price", 0)
-        
-        # Initialize variables for this symbol
-        intraday_bars = []
-        daily_bars = []
-        intraday_closes = []
-        intraday_volumes = []
-        daily_closes = []
-        daily_highs = []
-        daily_lows = []
-        daily_volumes = []
-        ema20_intraday = []
-        macd_intraday = []
-        rsi14_intraday = []
-        
-        try:
-            # Fetch intraday data (5-minute bars, last 2 hours = 24 bars)
-            intraday_bars = get_intraday_bars(symbol, timeframe="5Min", limit=24)
+    # ==================== Current Positions Overview ====================
+    if positions:
+        prompt_parts.append(
+            f"\nCURRENT POSITIONS\n"
+            f"{'=' * 80}"
+        )
+        for pos in positions:
+            symbol = pos.get("symbol", "UNKNOWN")
+            qty = pos.get("qty", 0)
+            current_price = pos.get("current_price", 0)
+            avg_entry = pos.get("avg_entry_price", 0)
+            unrealized_pl_pct = pos.get("unrealized_plpc", 0) * 100
+            market_value = pos.get("market_value", 0)
             
-            # Fetch daily data for longer-term context (60 days)
-            daily_bars = get_daily_bars(symbol, limit=60)
-            
-            # Calculate indicators if we have enough data
-            if intraday_bars and daily_bars:
-                # Extract price series
-                intraday_closes = [bar['close'] for bar in intraday_bars]
-                intraday_volumes = [bar['volume'] for bar in intraday_bars]
-                
-                daily_closes = [bar['close'] for bar in daily_bars]
-                daily_highs = [bar['high'] for bar in daily_bars]
-                daily_lows = [bar['low'] for bar in daily_bars]
-                daily_volumes = [bar['volume'] for bar in daily_bars]
-                
-                # Calculate intraday indicators
-                ema20_intraday = calculate_ema(intraday_closes, period=20) if len(intraday_closes) >= 20 else []
-                macd_intraday = calculate_macd(intraday_closes) if len(intraday_closes) >= 26 else []
-                rsi14_intraday = calculate_rsi(intraday_closes, period=14) if len(intraday_closes) >= 15 else []
-                
-                # Calculate daily indicators
-                atr14_daily = calculate_atr(daily_highs, daily_lows, daily_closes, period=14) if len(daily_closes) >= 15 else 0.0
-                avg_volume_20d = sum(daily_volumes[-20:]) / 20 if len(daily_volumes) >= 20 else 0
-                
-                # Get current values
-                current_ema20 = ema20_intraday[-1] if ema20_intraday else current_price
-                current_macd = macd_intraday[-1] if macd_intraday else 0
-                current_rsi14 = rsi14_intraday[-1] if rsi14_intraday else 50
-                current_volume = intraday_volumes[-1] if intraday_volumes else 0
-                
-                # Calculate spread (approximate as percentage of price)
-                current_spread = current_price * 0.001  # Approximate 0.1% spread
-                
-                # Add stock section
-                prompt_parts.append(
-                    f"\nALL {symbol} DATA\n"
-                    f"{'-' * 80}"
-                )
-                
-                # Current state with real data
-                prompt_parts.append(
-                    f"current_price = {current_price:.2f}, "
-                    f"current_ema20 = {current_ema20:.2f}, "
-                    f"current_macd = {current_macd:.3f}, "
-                    f"current_rsi (14 period) = {current_rsi14:.2f}"
-                )
-                
-                # Volume and volatility
-                prompt_parts.append(
-                    f"\nIn addition, here is the latest {symbol} volume and volatility metrics:"
-                )
-                prompt_parts.append(
-                    f"Average Volume (20-day): {avg_volume_20d:,.0f}  Current Volume: {current_volume:,.0f}"
-                )
-                prompt_parts.append(
-                    f"ATR (14-period): {atr14_daily:.2f}  Current Spread: {current_spread:.3f}"
-                )
-            else:
-                # Fallback if data fetch failed
-                prompt_parts.append(
-                    f"\nALL {symbol} DATA\n"
-                    f"{'-' * 80}"
-                )
-                prompt_parts.append(
-                    f"current_price = {current_price:.2f}, "
-                    f"current_ema20 = N/A (insufficient data), "
-                    f"current_macd = N/A (insufficient data), "
-                    f"current_rsi (14 period) = N/A (insufficient data)"
-                )
-                prompt_parts.append(
-                    f"\nIn addition, here is the latest {symbol} volume and volatility metrics:"
-                )
-                prompt_parts.append(
-                    f"Average Volume (20-day): N/A  Current Volume: N/A"
-                )
-                prompt_parts.append(
-                    f"ATR (14-period): N/A  Current Spread: N/A"
-                )
-        except Exception as e:
-            logger.error(f"Error fetching market data for {symbol}: {e}")
-            # Fallback if exception occurred
             prompt_parts.append(
-                f"\nALL {symbol} DATA\n"
-                f"{'-' * 80}"
+                f"  {symbol}: {qty:.2f} shares @ ${current_price:.2f} "
+                f"(entry: ${avg_entry:.2f}, P&L: {unrealized_pl_pct:+.1f}%, value: ${market_value:,.2f})"
             )
-            prompt_parts.append(
-                f"current_price = {current_price:.2f}, "
-                f"Error fetching additional data: {str(e)}"
-            )
-        
-        # Intraday series and longer-term context (only if we have the data)
-        try:
-            if intraday_bars and daily_bars and intraday_closes and daily_closes:
-                # Intraday series (last 10 bars)
-                last_10_prices = intraday_closes[-10:] if len(intraday_closes) >= 10 else intraday_closes
-                last_10_ema20 = ema20_intraday[-10:] if len(ema20_intraday) >= 10 else ema20_intraday
-                last_10_macd = macd_intraday[-10:] if len(macd_intraday) >= 10 else macd_intraday
-                last_10_rsi = rsi14_intraday[-10:] if len(rsi14_intraday) >= 10 else rsi14_intraday
-                last_10_volumes = intraday_volumes[-10:] if len(intraday_volumes) >= 10 else intraday_volumes
-                
-                prompt_parts.append(
-                    "\nIntraday series (5-minute intervals, oldest → latest):"
-                )
-                prompt_parts.append(
-                    f"{symbol} prices: {[round(p, 2) for p in last_10_prices]}"
-                )
-                if last_10_ema20:
-                    prompt_parts.append(
-                        f"EMA indicators (20-period): {[round(e, 2) for e in last_10_ema20]}"
-                    )
-                if last_10_macd:
-                    prompt_parts.append(
-                        f"MACD indicators: {[round(m, 3) for m in last_10_macd]}"
-                    )
-                if last_10_rsi:
-                    prompt_parts.append(
-                        f"RSI indicators (14-Period): {[round(r, 2) for r in last_10_rsi]}"
-                    )
-                prompt_parts.append(
-                    f"Volume series: {[int(v) for v in last_10_volumes]}"
-                )
-                
-                # Calculate daily indicators for longer-term context
-                sma20_daily = sum(daily_closes[-20:]) / 20 if len(daily_closes) >= 20 else 0
-                sma50_daily = sum(daily_closes[-50:]) / 50 if len(daily_closes) >= 50 else 0
-                atr30_daily = calculate_atr(daily_highs, daily_lows, daily_closes, period=30) if len(daily_closes) >= 31 else 0.0
-                macd_daily = calculate_macd(daily_closes) if len(daily_closes) >= 26 else []
-                rsi14_daily = calculate_rsi(daily_closes, period=14) if len(daily_closes) >= 15 else []
-                
-                last_10_macd_daily = macd_daily[-10:] if len(macd_daily) >= 10 else macd_daily
-                last_10_rsi_daily = rsi14_daily[-10:] if len(rsi14_daily) >= 10 else rsi14_daily
-                
-                # Longer-term context (daily timeframe)
-                prompt_parts.append(
-                    "\nLonger-term context (daily timeframe):"
-                )
-                if sma20_daily and sma50_daily:
-                    prompt_parts.append(
-                        f"20-Day SMA: {sma20_daily:.2f} vs. 50-Day SMA: {sma50_daily:.2f}"
-                    )
-                if atr14_daily and atr30_daily:
-                    prompt_parts.append(
-                        f"14-Day ATR: {atr14_daily:.2f} vs. 30-Day ATR: {atr30_daily:.2f}"
-                    )
-                if len(daily_volumes) >= 20:
-                    prompt_parts.append(
-                        f"Current Volume: {daily_volumes[-1]:,.0f} vs. Average Volume (20-day): {avg_volume_20d:,.0f}"
-                    )
-                if last_10_macd_daily:
-                    prompt_parts.append(
-                        f"MACD indicators (daily): {[round(m, 3) for m in last_10_macd_daily]}"
-                    )
-                if last_10_rsi_daily:
-                    prompt_parts.append(
-                        f"RSI indicators (14-Period daily): {[round(r, 2) for r in last_10_rsi_daily]}"
-                    )
-                
-                # Fundamental metrics (placeholder for now)
-                prompt_parts.append(
-                    "\nFundamental metrics:"
-                )
-                prompt_parts.append(
-                    "Market Cap: N/A, P/E Ratio: N/A, Dividend Yield: N/A%, Beta: N/A"
-                )
-        except Exception as e:
-            logger.error(f"Error processing indicators for {symbol}: {e}")
-            prompt_parts.append(
-                "\nIntraday series: Data processing error"
-            )
-        
         prompt_parts.append("=" * 80)
+    else:
+        prompt_parts.append(
+            f"\nCURRENT POSITIONS\n"
+            f"{'=' * 80}\n"
+            f"No positions currently held\n"
+            f"{'=' * 80}"
+        )
     
     # ==================== Account Information ====================
     prompt_parts.append(
-        f"\nHERE IS YOUR ACCOUNT INFORMATION & PERFORMANCE\n"
+        f"\nACCOUNT SUMMARY\n"
+        f"{'=' * 80}\n"
+        f"Available Cash: ${cash:,.2f}\n"
+        f"Portfolio Value: ${portfolio_value:,.2f}\n"
+        f"Total Equity: ${equity:,.2f}\n"
+        f"Total Return: {total_return_pct:+.2f}%\n"
         f"{'=' * 80}"
-    )
-    
-    prompt_parts.append(
-        f"Current Total Return (percent): {total_return_pct:.2f}%"
-    )
-    prompt_parts.append(
-        f"Available Cash: ${cash:,.2f}"
-    )
-    prompt_parts.append(
-        f"Current Account Value: ${portfolio_value:,.2f}"
-    )
-    prompt_parts.append(
-        f"Total Equity: ${equity:,.2f}"
-    )
-    
-    # Current positions
-    if positions:
-        prompt_parts.append(
-            "\nCurrent live positions & performance:"
-        )
-        for pos in positions:
-            position_str = (
-                f"{{'symbol': '{pos.get('symbol')}', "
-                f"'quantity': {pos.get('qty', 0):.2f}, "
-                f"'entry_price': {pos.get('avg_entry_price', 0):.2f}, "
-                f"'current_price': {pos.get('current_price', 0):.2f}, "
-                f"'market_value': {pos.get('market_value', 0):.2f}, "
-                f"'unrealized_pnl': {pos.get('unrealized_pl', 0):.2f}, "
-                f"'unrealized_pnl_pct': {(pos.get('unrealized_plpc', 0) * 100):.2f}%, "
-                f"'cost_basis': {pos.get('cost_basis', 0):.2f}, "
-                f"'change_today': {pos.get('change_today', 0):.2f}}}"
-            )
-            prompt_parts.append(position_str)
-    else:
-        prompt_parts.append(
-            "\nNo current positions"
-        )
-    
-    # Performance metrics
-    # You can add Sharpe ratio, max drawdown, etc. if calculated
-    prompt_parts.append(
-        "\nPortfolio Beta: [CALCULATE IF NEEDED]"
-    )
-    prompt_parts.append(
-        "Sharpe Ratio: [CALCULATE IF NEEDED]"
-    )
-    prompt_parts.append(
-        "Max Drawdown: [CALCULATE IF NEEDED]"
     )
     
     return "\n".join(prompt_parts)

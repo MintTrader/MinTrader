@@ -200,15 +200,8 @@ async def stream_portfolio_iteration(config: dict):
         "config": config,
         "phase": "init",
         "messages": [],
-        "stocks_to_analyze": [],
-        "analysis_results": {},
-        "recently_analyzed": {},
         "pending_trades": [],
         "executed_trades": [],
-        "web_search_used": False,
-        "market_context": "",
-        "promising_sectors": [],
-        "growth_stocks": [],
         "last_summary": "",
         "error": None
     }

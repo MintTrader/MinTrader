@@ -275,6 +275,8 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
             }
         
         config = state.get("config", {})
+        account = state.get("account", {})
+        positions = state.get("positions", [])
         
         # Import exit strategy and stock template (only in this node to save tokens)
         from .stock_prompt_template import EXIT_STRATEGY_GUIDANCE
@@ -325,6 +327,10 @@ def make_decisions_node(state: PortfolioState) -> Dict[str, Any]:
         tools_text = "\n".join(tool_descriptions)
         
         # Build comprehensive decision prompt with tool access
+        cash_available = account.get('cash', 0)
+        portfolio_value = account.get('portfolio_value', 0)
+        num_positions = len(positions)
+        
         prompt = f"""{stock_context}
 
 AVAILABLE SAFE TOOLS:
@@ -333,8 +339,32 @@ AVAILABLE SAFE TOOLS:
 
 {EXIT_STRATEGY_GUIDANCE}
 
+YOUR MANDATE:
+=============
+You are an autonomous portfolio manager running every minute during market hours.
 
-NOW: Review the portfolio and market data, and EXECUTE appropriate bracket orders for new positions."""
+CURRENT PORTFOLIO:
+- Cash Available: ${cash_available:,.2f}
+- Portfolio Value: ${portfolio_value:,.2f}
+- Active Positions: {num_positions}
+
+YOUR TASK THIS MINUTE:
+1. If you have available cash and see good entry opportunities, place BUY bracket orders
+2. Use place_buy_bracket_order() with proper stop-loss and take-profit levels
+3. Look for stocks with:
+   - Strong momentum (EMA trends, MACD signals)
+   - Good risk/reward setups
+   - Reasonable entry prices
+   
+4. You run every minute, so don't overthink - if you see a setup, take it
+5. Bracket orders automatically manage exits - no need to monitor positions
+
+IMPORTANT: 
+- You have REAL trading authority
+- If no good setups exist, that's fine - wait for the next minute
+- But if opportunities are clear, ACT ON THEM
+
+NOW: Review market data and execute any appropriate bracket orders."""
         
         # Create messages list for conversation
         messages = [
@@ -380,11 +410,11 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                         result = tool.invoke(tool_args)
                         logger.info(f"[SYSTEM]   ✅ {tool_name} result: {str(result)[:200]}...")
                         
-                        # Track trade executions (only place_bracket_order is allowed)
-                        if tool_name == 'place_bracket_order':
+                        # Track trade executions (only place_buy_bracket_order is allowed)
+                        if tool_name == 'place_buy_bracket_order':
                             executed_trades.append({
                                 'ticker': tool_args.get('symbol', 'UNKNOWN'),
-                                'action': tool_args.get('side', 'UNKNOWN').upper(),
+                                'action': 'BUY',  # Always BUY since this tool only does BUY orders
                                 'quantity': tool_args.get('qty', 0),
                                 'order_value': tool_args.get('notional', 0),
                                 'order_type': tool_args.get('type', 'market'),
@@ -414,13 +444,25 @@ NOW: Review the portfolio and market data, and EXECUTE appropriate bracket order
                     logger.warning(f"[SYSTEM]   ⚠️  Tool {tool_name} not found")
             
             # Give LLM one final call to summarize what it did
+            logger.info(f"[SYSTEM] 💬 Asking {model_tag} to summarize actions...")
             final_response = llm_with_tools.invoke(messages)
+            
             if final_response.content:
-                logger.info(f"{model_tag} Summary: {final_response.content}")
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info(f"[{model_tag}] 📝 RESPONSE AFTER TOOL EXECUTION")
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info(f"[{model_tag}] {final_response.content}")
+                logger.info("[SYSTEM] " + "=" * 70)
+            else:
+                logger.info(f"[SYSTEM] ℹ️  {model_tag} provided no additional commentary")
         else:
             # No tool calls - LLM decided to hold/do nothing
             if response.content:
-                logger.info(f"{model_tag} Decision: {response.content}")
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info(f"[{model_tag}] 📝 DECISION (NO TRADES)")
+                logger.info("[SYSTEM] " + "=" * 70)
+                logger.info(f"[{model_tag}] {response.content}")
+                logger.info("[SYSTEM] " + "=" * 70)
             logger.info("[SYSTEM] ✅ No trades executed this minute")
         
         logger.info(f"[SYSTEM] ✅ Executed {len(executed_trades)} trade operations")
@@ -466,7 +508,7 @@ def update_summary_node(state: PortfolioState) -> Dict[str, Any]:
         # Check if market was closed - skip summary creation entirely
         phase = state.get("phase", "")
         if phase == "market_closed":
-            market_clock = state.get("market_clock", {})
+            market_clock: Dict[str, Any] = state.get("market_clock", {})
             next_open = market_clock.get("next_open", "Unknown")
             
             logger.info("[SYSTEM] 🚫 Market was closed - skipping summary creation")
