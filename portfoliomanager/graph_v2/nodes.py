@@ -354,6 +354,14 @@ IMPORTANT:
 - Each position should be 5-10% of cash (${cash_available * 0.05:,.2f} - ${cash_available * 0.10:,.2f})
 - If no opportunities exist, that's fine - wait for next minute
 
+⚠️ CRITICAL: CASH FLOW PROTECTION
+- Current Cash: ${cash_available:,.2f}
+- NEVER place orders that exceed available cash
+- Orders that would result in negative cash will be REJECTED
+- Calculate: order_cost = qty × price
+- Verify: cash_after_order = ${cash_available:,.2f} - order_cost ≥ $0
+- If planning multiple orders, sum all costs before placing any
+
 NOW: Analyze stocks and PLACE bracket orders if opportunities are found."""
         
         # Create messages list for conversation

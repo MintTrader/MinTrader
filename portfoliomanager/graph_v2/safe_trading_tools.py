@@ -161,6 +161,67 @@ def place_buy_bracket_order(
     # Hardcode side to BUY only
     side = "buy"
     
+    # 1. CHECK CASH FLOW - PREVENT NEGATIVE CASH BALANCE
+    try:
+        from portfoliomanager.dataflows.alpaca_portfolio import _get_data_client, get_alpaca_account_info
+        from alpaca.data.requests import StockLatestQuoteRequest
+        
+        # Get current account info to check cash
+        account_info = get_alpaca_account_info()
+        current_cash = float(account_info.get('cash', 0))
+        
+        # Estimate order cost
+        # For market orders, we need to get current price
+        # For limit orders, we use the limit price
+        estimated_cost: float = 0.0
+        if type == "limit" and limit_price:
+            estimated_cost = float(qty * limit_price)
+        else:
+            # For market orders, fetch current ask price (what we'd pay for a buy)
+            try:
+                data_client = _get_data_client()
+                request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+                quotes = data_client.get_stock_latest_quote(request)
+                
+                if symbol in quotes:
+                    quote = quotes[symbol]
+                    # Use ask price for buy orders (worst case scenario)
+                    if hasattr(quote, 'ask_price') and quote.ask_price:
+                        current_price = float(quote.ask_price)
+                        estimated_cost = float(qty * current_price)
+                    else:
+                        error = f"Cannot estimate cost for market order on {symbol} - no ask price available. Please use a limit order instead."
+                        logger.error(error)
+                        return {"error": error, "status": "rejected"}
+                else:
+                    error = f"Cannot estimate cost for market order on {symbol} - no quote data available. Please use a limit order instead."
+                    logger.error(error)
+                    return {"error": error, "status": "rejected"}
+            except Exception as e:
+                error = f"Cannot estimate cost for market order on {symbol}: {str(e)}. Please use a limit order instead."
+                logger.error(error)
+                return {"error": error, "status": "rejected"}
+        
+        # Check if order would make cash negative
+        cash_after_order = current_cash - estimated_cost
+        if cash_after_order < 0:
+            error = (
+                f"INSUFFICIENT FUNDS: Order would result in negative cash balance.\n"
+                f"  Current Cash: ${current_cash:,.2f}\n"
+                f"  Estimated Order Cost: ${estimated_cost:,.2f}\n"
+                f"  Cash After Order: ${cash_after_order:,.2f}\n"
+                f"  This order is REJECTED to prevent overdraft."
+            )
+            logger.error(error)
+            return {"error": error, "status": "rejected"}
+        
+        logger.info(f"✓ Cash flow check passed: ${current_cash:,.2f} → ${cash_after_order:,.2f} (estimated cost: ${estimated_cost:,.2f})")
+        
+    except Exception as e:
+        error = f"Failed to validate cash flow: {str(e)}. Order rejected for safety."
+        logger.error(error)
+        return {"error": error, "status": "rejected"}
+    
     # 2. Require qty (bracket orders don't support notional)
     if qty is None or qty <= 0:
         error = "qty (number of shares) is REQUIRED and must be positive. Bracket orders do not support notional (dollar amount)."

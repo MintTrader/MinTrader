@@ -45,6 +45,16 @@ RISK MANAGEMENT:
 - Stop-loss: Typically 3-7% below entry
 - Take-profit: Typically 10-20% above entry (aim for 2:1 reward:risk)
 - NEVER place orders without exits
+
+⚠️ CRITICAL CASH FLOW CONSTRAINT:
+===================================
+NEVER place orders that would make your cash balance negative!
+- The system will REJECT any order that would result in negative cash
+- ALWAYS check available cash BEFORE placing orders
+- Calculate order cost: (qty × price)
+- Ensure: cash_after_order = current_cash - order_cost ≥ 0
+- If multiple orders planned, account for cumulative cost
+- Orders will be rejected with "INSUFFICIENT FUNDS" error if this rule is violated
 """
 
 
