@@ -83,8 +83,6 @@ def place_buy_bracket_order(
     take_profit_price: float,
     type: str = "market",
     limit_price: Optional[float] = None,
-    time_in_force: str = "day",
-    extended_hours: bool = False
 ) -> Dict[str, Any]:
     """
     Place a BUY bracket order with mandatory stop-loss and take-profit.
@@ -104,11 +102,6 @@ def place_buy_bracket_order(
     - Calculate shares: qty = round(dollar_amount / current_price)
     - Always use whole numbers for qty (e.g., 10, 25, 100)
     
-    EXTENDED HOURS TRADING:
-    - Set extended_hours=True to trade outside regular hours (4am-8pm ET)
-    - Extended hours requires: type="limit", time_in_force="day", limit_price
-    - Regular hours (9:30am-4pm ET): Can use market or limit orders
-    
     Args:
         symbol: Stock ticker (e.g., "AAPL")
         qty: Number of WHOLE shares to buy (REQUIRED - cannot use dollar amounts)
@@ -116,8 +109,6 @@ def place_buy_bracket_order(
         take_profit_price: Price to sell if market rises (REQUIRED)
         type: Order type - "market" (regular hours only) or "limit"
         limit_price: Limit price if type="limit" or extended_hours=True
-        time_in_force: "day" (required for extended hours), "gtc", "ioc", "fok"
-        extended_hours: True to trade in extended hours (pre/after market)
         
     Returns:
         Order result from Alpaca API
@@ -143,17 +134,7 @@ def place_buy_bracket_order(
             take_profit_price=418.00   # +10%
         )
         
-        # Extended hours trading (pre-market or after-hours)
-        place_buy_bracket_order(
-            symbol="GOOGL",
-            qty=20,                    # MUST be whole number (calculated from budget)
-            type="limit",              # REQUIRED for extended hours
-            limit_price=145.50,
-            stop_loss_price=138.25,
-            take_profit_price=159.00,
-            time_in_force="day",       # REQUIRED for extended hours
-            extended_hours=True        # Enable extended hours
-        )
+
     """
     
     # ==================== Validation ====================
@@ -246,26 +227,6 @@ def place_buy_bracket_order(
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
-    # 5. Extended hours validation
-    if extended_hours:
-        # Extended hours requires limit orders
-        if type != "limit":
-            error = "Extended hours trading requires type='limit' (market orders not allowed)"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-        
-        # Extended hours requires time_in_force="day"
-        if time_in_force != "day":
-            error = "Extended hours trading requires time_in_force='day'"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-        
-        # Extended hours requires limit_price
-        if limit_price is None:
-            error = "Extended hours trading requires limit_price"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-    
     # 6. If limit order, require limit_price
     if type == "limit" and limit_price is None:
         error = "limit_price is required when type='limit'"
@@ -306,15 +267,6 @@ def place_buy_bracket_order(
         # Convert string side to OrderSide enum
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
         
-        # Convert time_in_force to enum
-        tif_map = {
-            "day": TimeInForce.DAY,
-            "gtc": TimeInForce.GTC,
-            "ioc": TimeInForce.IOC,
-            "fok": TimeInForce.FOK
-        }
-        time_in_force_enum = tif_map.get(time_in_force.lower(), TimeInForce.DAY)
-        
         # Create TakeProfit and StopLoss requests
         # These are already validated as not None earlier
         assert take_profit_price is not None
@@ -332,11 +284,11 @@ def place_buy_bracket_order(
                 symbol=symbol,
                 qty=qty_int,
                 side=order_side,
-                time_in_force=time_in_force_enum,
+                time_in_force=TimeInForce.GTC,
                 order_class=OrderClass.BRACKET,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                extended_hours=extended_hours
+                extended_hours=False
             )
         else:  # limit order
             # limit_price is already validated for limit orders
@@ -345,19 +297,18 @@ def place_buy_bracket_order(
                 symbol=symbol,
                 qty=qty_int,
                 side=order_side,
-                time_in_force=time_in_force_enum,
+                time_in_force=TimeInForce.GTC,
                 limit_price=round(limit_price, 2),
                 order_class=OrderClass.BRACKET,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                extended_hours=extended_hours
+                extended_hours=False
             )
         
         logger.info(
             f"📊 Placing bracket order: {symbol} "
             f"{qty_int} shares @ {limit_price or 'market'}, "
             f"Stop: {stop_loss_price:.2f}, Target: {take_profit_price:.2f}"
-            f"{' (EXTENDED HOURS)' if extended_hours else ''}"
         )
         
         # Submit order to Alpaca
@@ -407,8 +358,6 @@ def place_short_bracket_order(
     take_profit_price: float,
     type: str = "market",
     limit_price: Optional[float] = None,
-    time_in_force: str = "day",
-    extended_hours: bool = False
 ) -> Dict[str, Any]:
     """
     Place a SHORT bracket order with mandatory stop-loss and take-profit.
@@ -434,20 +383,13 @@ def place_short_bracket_order(
     - Take-profit price MUST be BELOW entry price (shorts profit when price falls)
     - Maximum position size: Calculate based on (cash - 5% portfolio buffer)
     
-    EXTENDED HOURS TRADING:
-    - Set extended_hours=True to trade outside regular hours (4am-8pm ET)
-    - Extended hours requires: type="limit", time_in_force="day", limit_price
-    - Regular hours (9:30am-4pm ET): Can use market or limit orders
-    
     Args:
         symbol: Stock ticker (e.g., "AAPL")
         qty: Number of WHOLE shares to short sell (REQUIRED - cannot use dollar amounts)
         stop_loss_price: Price to buy back if market rises (REQUIRED, ABOVE entry)
         take_profit_price: Price to buy back if market falls (REQUIRED, BELOW entry)
         type: Order type - "market" (regular hours only) or "limit"
-        limit_price: Limit price if type="limit" or extended_hours=True
-        time_in_force: "day" (required for extended hours), "gtc", "ioc", "fok"
-        extended_hours: True to trade in extended hours (pre/after market)
+        limit_price: Limit price if type="limit"
         
     Returns:
         Order result from Alpaca API
@@ -580,23 +522,6 @@ def place_short_bracket_order(
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
-    # 5. Extended hours validation
-    if extended_hours:
-        if type != "limit":
-            error = "Extended hours trading requires type='limit' (market orders not allowed)"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-        
-        if time_in_force != "day":
-            error = "Extended hours trading requires time_in_force='day'"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-        
-        if limit_price is None:
-            error = "Extended hours trading requires limit_price"
-            logger.error(error)
-            return {"error": error, "status": "rejected"}
-    
     # 6. If limit order, require limit_price
     if type == "limit" and limit_price is None:
         error = "limit_price is required when type='limit'"
@@ -638,15 +563,6 @@ def place_short_bracket_order(
         # Convert string side to OrderSide enum
         order_side = OrderSide.SELL  # SHORT SELL
         
-        # Convert time_in_force to enum
-        tif_map = {
-            "day": TimeInForce.DAY,
-            "gtc": TimeInForce.GTC,
-            "ioc": TimeInForce.IOC,
-            "fok": TimeInForce.FOK
-        }
-        time_in_force_enum = tif_map.get(time_in_force.lower(), TimeInForce.DAY)
-        
         # Create TakeProfit and StopLoss requests
         assert take_profit_price is not None
         assert stop_loss_price is not None
@@ -662,11 +578,11 @@ def place_short_bracket_order(
                 symbol=symbol,
                 qty=qty_int,
                 side=order_side,
-                time_in_force=time_in_force_enum,
+                time_in_force=TimeInForce.GTC,
                 order_class=OrderClass.BRACKET,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                extended_hours=extended_hours
+                extended_hours=False
             )
         else:  # limit order
             assert limit_price is not None
@@ -674,19 +590,18 @@ def place_short_bracket_order(
                 symbol=symbol,
                 qty=qty_int,
                 side=order_side,
-                time_in_force=time_in_force_enum,
+                time_in_force=TimeInForce.GTC,
                 limit_price=round(limit_price, 2),
                 order_class=OrderClass.BRACKET,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                extended_hours=extended_hours
+                extended_hours=False
             )
         
         logger.info(
             f"📊 Placing SHORT bracket order: {symbol} "
             f"{qty_int} shares @ {limit_price or 'market'}, "
             f"Stop: {stop_loss_price:.2f}, Target: {take_profit_price:.2f}"
-            f"{' (EXTENDED HOURS)' if extended_hours else ''}"
         )
         
         # Submit order to Alpaca
