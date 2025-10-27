@@ -78,10 +78,9 @@ def filter_safe_tools(all_tools: List) -> List:
 @tool
 def place_buy_bracket_order(
     symbol: str,
-    notional: Optional[float] = None,
-    qty: Optional[float] = None,
-    stop_loss_price: Optional[float] = None,
-    take_profit_price: Optional[float] = None,
+    qty: float,
+    stop_loss_price: float,
+    take_profit_price: float,
     type: str = "market",
     limit_price: Optional[float] = None,
     time_in_force: str = "day",
@@ -99,6 +98,12 @@ def place_buy_bracket_order(
     
     LONG POSITIONS ONLY - This function ONLY places BUY orders. Short selling is not supported.
     
+    ⚠️ CRITICAL: BRACKET ORDERS ONLY SUPPORT WHOLE SHARE QUANTITIES (qty parameter)
+    - You MUST use qty (number of shares) - NOT notional (dollar amount)
+    - Alpaca does not allow fractional/notional orders with bracket orders
+    - Calculate shares: qty = round(dollar_amount / current_price)
+    - Always use whole numbers for qty (e.g., 10, 25, 100)
+    
     EXTENDED HOURS TRADING:
     - Set extended_hours=True to trade outside regular hours (4am-8pm ET)
     - Extended hours requires: type="limit", time_in_force="day", limit_price
@@ -106,8 +111,7 @@ def place_buy_bracket_order(
     
     Args:
         symbol: Stock ticker (e.g., "AAPL")
-        notional: Dollar amount to invest (use this OR qty, not both)
-        qty: Number of shares (use this OR notional, not both)
+        qty: Number of WHOLE shares to buy (REQUIRED - cannot use dollar amounts)
         stop_loss_price: Price to sell if market drops (REQUIRED)
         take_profit_price: Price to sell if market rises (REQUIRED)
         type: Order type - "market" (regular hours only) or "limit"
@@ -119,11 +123,11 @@ def place_buy_bracket_order(
         Order result from Alpaca API
         
     Examples:
-        # Buy $5000 of AAPL with 5% stop-loss and 10% take-profit
+        # Buy 27 shares of AAPL (calculated from ~$5000 budget at $180/share)
         # Current price: $180
         place_buy_bracket_order(
             symbol="AAPL",
-            notional=5000,
+            qty=27,                    # MUST be whole number
             stop_loss_price=171.00,    # -5%
             take_profit_price=198.00,  # +10%
             type="market"
@@ -132,7 +136,7 @@ def place_buy_bracket_order(
         # Buy 50 shares of MSFT with specific entry price
         place_buy_bracket_order(
             symbol="MSFT",
-            qty=50,
+            qty=50,                    # MUST be whole number
             type="limit",
             limit_price=380.00,
             stop_loss_price=361.00,    # -5%
@@ -142,7 +146,7 @@ def place_buy_bracket_order(
         # Extended hours trading (pre-market or after-hours)
         place_buy_bracket_order(
             symbol="GOOGL",
-            notional=3000,
+            qty=20,                    # MUST be whole number (calculated from budget)
             type="limit",              # REQUIRED for extended hours
             limit_price=145.50,
             stop_loss_price=138.25,
@@ -157,26 +161,27 @@ def place_buy_bracket_order(
     # Hardcode side to BUY only
     side = "buy"
     
-    # 2. Require either qty or notional
-    if qty is None and notional is None:
-        error = "Must specify either 'qty' or 'notional'"
+    # 2. Require qty (bracket orders don't support notional)
+    if qty is None or qty <= 0:
+        error = "qty (number of shares) is REQUIRED and must be positive. Bracket orders do not support notional (dollar amount)."
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
-    if qty is not None and notional is not None:
-        error = "Cannot specify both 'qty' and 'notional'. Choose one."
+    # Ensure qty is a whole number (no fractional shares in bracket orders)
+    if qty != int(qty):
+        error = f"qty must be a whole number (got {qty}). Bracket orders do not support fractional shares."
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
-    # 3. Require stop-loss
-    if stop_loss_price is None:
-        error = "stop_loss_price is REQUIRED for all orders. Never trade without a stop-loss!"
+    # 3. Require stop-loss (already required in function signature, but validate)
+    if stop_loss_price is None or stop_loss_price <= 0:
+        error = "stop_loss_price is REQUIRED for all orders and must be positive. Never trade without a stop-loss!"
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
-    # 4. Require take-profit
-    if take_profit_price is None:
-        error = "take_profit_price is REQUIRED for all orders. Never trade without a profit target!"
+    # 4. Require take-profit (already required in function signature, but validate)
+    if take_profit_price is None or take_profit_price <= 0:
+        error = "take_profit_price is REQUIRED for all orders and must be positive. Never trade without a profit target!"
         logger.error(error)
         return {"error": error, "status": "rejected"}
     
@@ -257,12 +262,14 @@ def place_buy_bracket_order(
         stop_loss = StopLossRequest(stop_price=round(stop_loss_price, 2))
         
         # Build order request based on order type
+        # Convert qty to int to ensure whole shares
+        qty_int = int(qty)
+        
         order_request: Union[MarketOrderRequest, LimitOrderRequest]
         if type == "market":
             order_request = MarketOrderRequest(
                 symbol=symbol,
-                qty=qty if qty is not None else None,
-                notional=notional if notional is not None else None,
+                qty=qty_int,
                 side=order_side,
                 time_in_force=time_in_force_enum,
                 order_class=OrderClass.BRACKET,
@@ -275,8 +282,7 @@ def place_buy_bracket_order(
             assert limit_price is not None
             order_request = LimitOrderRequest(
                 symbol=symbol,
-                qty=qty if qty is not None else None,
-                notional=notional if notional is not None else None,
+                qty=qty_int,
                 side=order_side,
                 time_in_force=time_in_force_enum,
                 limit_price=round(limit_price, 2),
@@ -288,8 +294,7 @@ def place_buy_bracket_order(
         
         logger.info(
             f"📊 Placing bracket order: {symbol} "
-            f"{'$' + str(notional) if notional else str(qty) + ' shares'} "
-            f"@ {limit_price or 'market'}, "
+            f"{qty_int} shares @ {limit_price or 'market'}, "
             f"Stop: {stop_loss_price:.2f}, Target: {take_profit_price:.2f}"
             f"{' (EXTENDED HOURS)' if extended_hours else ''}"
         )
@@ -303,8 +308,7 @@ def place_buy_bracket_order(
             "order_id": order.id,  # type: ignore
             "symbol": order.symbol,  # type: ignore
             "side": order.side,  # type: ignore
-            "qty": float(order.qty) if order.qty else None,  # type: ignore
-            "notional": float(order.notional) if hasattr(order, 'notional') and order.notional else None,  # type: ignore
+            "qty": int(order.qty) if order.qty else None,  # type: ignore
             "type": order.type,  # type: ignore
             "order_class": order.order_class,  # type: ignore
             "stop_loss_price": stop_loss_price,

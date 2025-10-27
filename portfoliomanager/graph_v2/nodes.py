@@ -407,19 +407,25 @@ NOW: Analyze stocks and PLACE bracket orders if opportunities are found."""
                             logger.info(f"[SYSTEM]   ✅ {tool_name} result: {str(result)[:200]}...")
                             
                             # Track trade executions (only place_buy_bracket_order is allowed)
+                            # Only track successful trades (check result status)
                             if tool_name == 'place_buy_bracket_order':
-                                executed_trades.append({
-                                    'ticker': tool_args.get('symbol', 'UNKNOWN'),
-                                    'action': 'BUY',  # Always BUY since this tool only does BUY orders
-                                    'quantity': tool_args.get('qty', 0),
-                                    'order_value': tool_args.get('notional', 0),
-                                    'order_type': tool_args.get('type', 'market'),
-                                    'stop_loss_price': tool_args.get('stop_loss_price'),
-                                    'take_profit_price': tool_args.get('take_profit_price'),
-                                    'status': 'submitted',
-                                    'executed_at': datetime.now().isoformat(),
-                                    'tool_result': str(result)[:500]
-                                })
+                                # Check if the order was successfully placed
+                                if isinstance(result, dict) and result.get('status') == 'success':
+                                    executed_trades.append({
+                                        'ticker': tool_args.get('symbol', 'UNKNOWN'),
+                                        'action': 'BUY',  # Always BUY since this tool only does BUY orders
+                                        'quantity': tool_args.get('qty', 0),
+                                        'order_type': tool_args.get('type', 'market'),
+                                        'stop_loss_price': tool_args.get('stop_loss_price'),
+                                        'take_profit_price': tool_args.get('take_profit_price'),
+                                        'status': 'submitted',
+                                        'executed_at': datetime.now().isoformat(),
+                                        'order_id': result.get('order_id'),
+                                        'tool_result': str(result)[:500]
+                                    })
+                                else:
+                                    # Log failed trade attempt but don't add to executed_trades
+                                    logger.warning(f"[SYSTEM]   ⚠️  Trade failed: {result.get('error', 'Unknown error')}")
                             
                             # Add tool result to messages
                             messages.append(ToolMessage(
@@ -459,7 +465,7 @@ NOW: Analyze stocks and PLACE bracket orders if opportunities are found."""
             logger.info(f"[SYSTEM] ✅ Executed {len(executed_trades)} trade operation(s)")
             for trade in executed_trades:
                 logger.info(f"[SYSTEM]    📈 {trade['action']} {trade['ticker']}: "
-                           f"${trade.get('order_value', 'N/A')} "
+                           f"{trade.get('quantity', 'N/A')} shares "
                            f"(SL: ${trade.get('stop_loss_price')}, TP: ${trade.get('take_profit_price')})")
         else:
             logger.info("[SYSTEM] ℹ️  No trades executed this minute")
