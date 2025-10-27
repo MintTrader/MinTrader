@@ -343,24 +343,27 @@ CURRENT PORTFOLIO:
 
 YOUR WORKFLOW:
 1. ANALYZE: Use get_stock_snapshot() or get_stock_quote() to check stocks
-2. DECIDE: Identify good entry opportunities with momentum
-3. EXECUTE: Call place_buy_bracket_order() to place trades
+2. DECIDE: Identify good entry opportunities (long or short)
+3. EXECUTE: Call place_buy_bracket_order() for longs OR place_short_bracket_order() for shorts
 4. CONFIRM: Summarize what you did
 
 IMPORTANT:
 - You have REAL trading authority - actually place orders, don't just analyze
 - After analyzing stocks, IMMEDIATELY place bracket orders if they look good
-- Don't say "let's execute" - actually call place_buy_bracket_order()
+- Don't say "let's execute" - actually call place_buy_bracket_order() or place_short_bracket_order()
 - Each position should be 5-10% of cash (${cash_available * 0.05:,.2f} - ${cash_available * 0.10:,.2f})
-- If no opportunities exist, that's fine - wait for next minute
+- If no opportunities exist, that's fine - wait for 10 minutes
+- Once a bracket order is placed, no need to monitor that stock in this run (exits are automatic)
 
 ⚠️ CRITICAL: CASH FLOW PROTECTION
 - Current Cash: ${cash_available:,.2f}
 - NEVER place orders that exceed available cash
 - Orders that would result in negative cash will be REJECTED
-- Calculate: order_cost = qty × price
+- For LONG positions: order_cost = qty × price
+- For SHORT positions: Reserve 5% of portfolio value as buffer for slippage and late exits
 - Verify: cash_after_order = ${cash_available:,.2f} - order_cost ≥ $0
 - If planning multiple orders, sum all costs before placing any
+- DO NOT place both buy and short bracket orders on the same stock
 
 NOW: Analyze stocks and PLACE bracket orders if opportunities are found."""
         

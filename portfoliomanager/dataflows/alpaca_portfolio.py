@@ -333,13 +333,15 @@ def get_alpaca_all_orders(status: str = "all") -> List[Dict[str, Any]]:
     return result
 
 
-def get_intraday_bars(symbol: str, timeframe: str = "5Min", limit: int = 24) -> List[Dict[str, Any]]:
+def get_intraday_bars(symbol: str, timeframe: str = "15Min", limit: int = 24) -> List[Dict[str, Any]]:
     """
     Get intraday bars for a symbol from Alpaca.
     
+    Note: 1Min and 5Min timeframes require Alpaca subscription and are not supported.
+    
     Args:
         symbol: Stock ticker symbol
-        timeframe: Timeframe for bars (e.g., "1Min", "5Min", "15Min", "1Hour")
+        timeframe: Timeframe for bars ("15Min", "1Hour", "1Day") - default "15Min"
         limit: Maximum number of bars to fetch
         
     Returns:
@@ -347,20 +349,23 @@ def get_intraday_bars(symbol: str, timeframe: str = "5Min", limit: int = 24) -> 
     """
     client = _get_data_client()
     
-    # Map timeframe string to TimeFrame enum
+    # Map timeframe string to TimeFrame enum (removed 1Min and 5Min - require subscription)
     timeframe_map = {
-        "1Min": TimeFrame.Minute,
-        "5Min": TimeFrame(5, TimeFrameUnit.Minute),
         "15Min": TimeFrame(15, TimeFrameUnit.Minute),
         "1Hour": TimeFrame.Hour,
         "1Day": TimeFrame.Day
     }
     
-    tf = timeframe_map.get(timeframe, TimeFrame(5, TimeFrameUnit.Minute))
+    # Validate timeframe
+    if timeframe not in timeframe_map:
+        logger.warning(f"Unsupported timeframe '{timeframe}'. Using default '15Min'. Available: 15Min, 1Hour, 1Day")
+        timeframe = "15Min"
+    
+    tf = timeframe_map.get(timeframe, TimeFrame(15, TimeFrameUnit.Minute))
     
     # Calculate start time based on limit and timeframe
-    # For 5-min bars, 24 bars = 2 hours
-    now = datetime.now()
+    # Use time 15 minutes before now to avoid SIP data not available errors
+    now = datetime.now() - timedelta(minutes=15)
     if "Min" in timeframe:
         minutes_per_bar = int(timeframe.replace("Min", ""))
         hours_back = (limit * minutes_per_bar) / 60
@@ -371,11 +376,12 @@ def get_intraday_bars(symbol: str, timeframe: str = "5Min", limit: int = 24) -> 
     else:
         start = now - timedelta(days=limit + 5)  # Add buffer
     
-    # Create request
+    # Create request with end time to avoid SIP data errors
     request = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=tf,
         start=start,
+        end=now,  # End at 15 minutes before current time
         limit=limit
     )
     
@@ -406,6 +412,8 @@ def get_daily_bars(symbol: str, limit: int = 60) -> List[Dict[str, Any]]:
     """
     Get daily bars for a symbol from Alpaca.
     
+    Note: Uses time 15 minutes before now to avoid SIP data not available errors.
+    
     Args:
         symbol: Stock ticker symbol
         limit: Maximum number of bars to fetch (days)
@@ -415,15 +423,16 @@ def get_daily_bars(symbol: str, limit: int = 60) -> List[Dict[str, Any]]:
     """
     client = _get_data_client()
     
-    # Calculate start time
-    now = datetime.now()
+    # Calculate start time - use 15 minutes before now to avoid SIP data errors
+    now = datetime.now() - timedelta(minutes=15)
     start = now - timedelta(days=limit + 10)  # Add buffer for weekends/holidays
     
-    # Create request
+    # Create request with end time to avoid SIP data errors
     request = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=start,
+        end=now,  # End at 15 minutes before current time
         limit=limit
     )
     

@@ -24,37 +24,61 @@ logger = logging.getLogger(__name__)
 EXIT_STRATEGY_GUIDANCE = """
 BRACKET ORDER REQUIREMENTS:
 ===========================
-Every BUY must use place_buy_bracket_order with mandatory stop-loss & take-profit.
+Every trade must use bracket orders with mandatory stop-loss & take-profit.
 
+LONG POSITIONS (place_buy_bracket_order):
 Example:
 place_buy_bracket_order(
     symbol="AAPL",
-    notional=5000,                # Dollar amount to invest
+    qty=27,                       # Number of shares (whole number)
     type="market",
     stop_loss_price=171.00,       # Entry × 0.95 (-5%)
     take_profit_price=198.00      # Entry × 1.10 (+10%)
 )
 
-CALCULATION:
-Entry: $180.00
-Stop-Loss (-5%): $180 × 0.95 = $171.00
-Take-Profit (+10%): $180 × 1.10 = $198.00
+SHORT POSITIONS (place_short_bracket_order):
+Example:
+place_short_bracket_order(
+    symbol="TSLA",
+    qty=10,                       # Number of shares (whole number)
+    type="market",
+    stop_loss_price=315.00,       # Entry × 1.05 (+5%, ABOVE entry)
+    take_profit_price=270.00      # Entry × 0.90 (-10%, BELOW entry)
+)
+
+CALCULATION EXAMPLES:
+Long Entry: $180.00
+  Stop-Loss (-5%): $180 × 0.95 = $171.00
+  Take-Profit (+10%): $180 × 1.10 = $198.00
+
+Short Entry: $300.00
+  Stop-Loss (+5%): $300 × 1.05 = $315.00 (buy back higher)
+  Take-Profit (-10%): $300 × 0.90 = $270.00 (buy back lower)
 
 RISK MANAGEMENT:
 - Position size: Use 5-10% of available cash per position
-- Stop-loss: Typically 3-7% below entry
-- Take-profit: Typically 10-20% above entry (aim for 2:1 reward:risk)
+- Stop-loss: Typically 3-7% from entry
+- Take-profit: Typically 10-20% from entry (aim for 2:1 reward:risk)
 - NEVER place orders without exits
+- Reserve 5% of total portfolio value as cash buffer for short positions (slippage & late exits)
 
 ⚠️ CRITICAL CASH FLOW CONSTRAINT:
 ===================================
 NEVER place orders that would make your cash balance negative!
 - The system will REJECT any order that would result in negative cash
 - ALWAYS check available cash BEFORE placing orders
-- Calculate order cost: (qty × price)
+- For LONG positions: Calculate cost as (qty × price)
+- For SHORT positions: Reserve 5% of portfolio value as buffer
 - Ensure: cash_after_order = current_cash - order_cost ≥ 0
 - If multiple orders planned, account for cumulative cost
 - Orders will be rejected with "INSUFFICIENT FUNDS" error if this rule is violated
+
+⚠️ BRACKET ORDER MONITORING:
+=============================
+- Once a bracket order is placed, NO NEED to monitor that stock in the same run
+- The bracket order automatically manages the exit (stop-loss or take-profit)
+- Next run, you can make new orders for the same or different stocks
+- DO NOT place both buy and short bracket orders on the same stock
 """
 
 
@@ -190,7 +214,7 @@ def generate_stock_portfolio_prompt(
         f"Use the available tools to find trading opportunities:\n"
         f"1. get_stock_snapshot(symbol) - Get comprehensive real-time data for any stock\n"
         f"2. get_stock_quote(symbol) - Get current bid/ask prices\n"
-        f"3. get_stock_bars(symbol, timeframe='5Min', days=1) - Get price history\n"
+        f"3. get_stock_bars(symbol, timeframe='15Min', days=1) - Get price history\n"
         f"\n"
         f"Consider stocks from major indices:\n"
         f"- Tech: AAPL, MSFT, GOOGL, META, NVDA, TSLA, AMZN\n"
@@ -262,7 +286,7 @@ def generate_stock_trading_prompt_with_live_data(
     )
     prompt_parts.append(
         "Timeframes note: Unless stated otherwise, "
-        "intraday series are provided at 5-minute intervals.\n"
+        "intraday series are provided at 15-minute intervals.\n"
     )
     prompt_parts.append("=" * 80)
     
@@ -294,10 +318,10 @@ def generate_stock_trading_prompt_with_live_data(
         current_price = position.get("current_price", 0)
         
         try:
-            # Fetch intraday data (5-minute bars, last 2 hours = 24 bars, show last 10)
+            # Fetch intraday data (15-minute bars, last 6 hours = 24 bars, show last 10)
             intraday_bars = market_data_fetcher.get_intraday_bars(
                 symbol, 
-                timeframe="5Min",
+                timeframe="15Min",
                 limit=24
             )
             
@@ -365,7 +389,7 @@ def generate_stock_trading_prompt_with_live_data(
             last_10_volumes = intraday_volumes[-10:]
             
             prompt_parts.append(
-                "\nIntraday series (5-minute intervals, oldest → latest):\n"
+                "\nIntraday series (15-minute intervals, oldest → latest):\n"
                 f"{symbol} prices: {[round(p, 2) for p in last_10_prices]}\n"
                 f"EMA indicators (20-period): {[round(e, 3) for e in last_10_ema20]}\n"
                 f"MACD indicators: {[round(m, 3) for m in last_10_macd]}\n"
