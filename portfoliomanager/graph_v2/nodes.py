@@ -355,6 +355,13 @@ IMPORTANT:
 - If no opportunities exist, that's fine - wait for 10 minutes
 - Once a bracket order is placed, no need to monitor that stock in this run (exits are automatic)
 
+⚠️ CRITICAL: USE TIGHT STOP-LOSS AND TAKE-PROFIT (1-2% range)
+- It will take WEEKS before we can create new orders
+- ALL trades must be SHORT-TERM with stop-loss and take-profit VERY CLOSE to entry price
+- Stop-loss: 1-2% from entry (NOT 5% or more)
+- Take-profit: 2-3% from entry (NOT 10% or more)
+- Goal: Complete trades in HOURS or DAYS, not weeks
+
 ⚠️ CRITICAL: CASH FLOW PROTECTION
 - Current Cash: ${cash_available:,.2f}
 - NEVER place orders that exceed available cash

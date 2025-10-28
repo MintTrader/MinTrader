@@ -26,14 +26,24 @@ BRACKET ORDER REQUIREMENTS:
 ===========================
 Every trade must use bracket orders with mandatory stop-loss & take-profit.
 
+⚠️ CRITICAL: SHORT-TERM TRADING STRATEGY
+=========================================
+IT WILL TAKE WEEKS BEFORE WE CAN CREATE NEW ORDERS!
+Therefore, ALL TRADES MUST BE SHORT-TERM with TIGHT stop-loss and take-profit levels.
+The goal is to complete trades QUICKLY (within hours or days, not weeks).
+
+Set your stop-loss and take-profit MUCH CLOSER to the current stock price:
+- Stop-loss: 1-2% from entry (NOT 5%)
+- Take-profit: 2-3% from entry (NOT 10%)
+
 LONG POSITIONS (place_buy_bracket_order):
 Example:
 place_buy_bracket_order(
     symbol="AAPL",
     qty=27,                       # Number of shares (whole number)
     type="market",
-    stop_loss_price=171.00,       # Entry × 0.95 (-5%)
-    take_profit_price=198.00      # Entry × 1.10 (+10%)
+    stop_loss_price=176.40,       # Entry × 0.98 (-2%) - MUCH CLOSER
+    take_profit_price=183.60      # Entry × 1.02 (+2%) - MUCH CLOSER
 )
 
 SHORT POSITIONS (place_short_bracket_order):
@@ -42,25 +52,26 @@ place_short_bracket_order(
     symbol="TSLA",
     qty=10,                       # Number of shares (whole number)
     type="market",
-    stop_loss_price=315.00,       # Entry × 1.05 (+5%, ABOVE entry)
-    take_profit_price=270.00      # Entry × 0.90 (-10%, BELOW entry)
+    stop_loss_price=306.00,       # Entry × 1.02 (+2%, ABOVE entry) - MUCH CLOSER
+    take_profit_price=294.00      # Entry × 0.98 (-2%, BELOW entry) - MUCH CLOSER
 )
 
-CALCULATION EXAMPLES:
+CALCULATION EXAMPLES FOR SHORT-TERM TRADES:
 Long Entry: $180.00
-  Stop-Loss (-5%): $180 × 0.95 = $171.00
-  Take-Profit (+10%): $180 × 1.10 = $198.00
+  Stop-Loss (-2%): $180 × 0.98 = $176.40 (TIGHT - exits quickly if wrong)
+  Take-Profit (+2%): $180 × 1.02 = $183.60 (TIGHT - captures profit quickly)
 
 Short Entry: $300.00
-  Stop-Loss (+5%): $300 × 1.05 = $315.00 (buy back higher)
-  Take-Profit (-10%): $300 × 0.90 = $270.00 (buy back lower)
+  Stop-Loss (+2%): $300 × 1.02 = $306.00 (buy back higher - TIGHT)
+  Take-Profit (-2%): $300 × 0.98 = $294.00 (buy back lower - TIGHT)
 
-RISK MANAGEMENT:
+RISK MANAGEMENT FOR SHORT-TERM TRADES:
 - Position size: Use 5-10% of available cash per position
-- Stop-loss: Typically 3-7% from entry
-- Take-profit: Typically 10-20% from entry (aim for 2:1 reward:risk)
+- Stop-loss: 1-2% from entry (NOT 3-7%) - keeps trades SHORT
+- Take-profit: 2-3% from entry (NOT 10-20%) - ensures QUICK exits
 - NEVER place orders without exits
 - Reserve 5% of total portfolio value as cash buffer for short positions (slippage & late exits)
+- Trades should complete within HOURS or DAYS, not weeks
 
 ⚠️ CRITICAL CASH FLOW CONSTRAINT:
 ===================================
